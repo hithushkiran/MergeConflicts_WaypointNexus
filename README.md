@@ -5,9 +5,9 @@ Waypoint Nexus is a four-role delivery orchestration platform for Store Managers
 ## Approved technology stack
 
 - Frontend: React, TypeScript, Vite, Tailwind CSS, TanStack Query
-- Backend: Python and FastAPI (SQLAlchemy, Alembic, and PostgreSQL are introduced later)
+- Backend: Python 3.12, FastAPI, SQLAlchemy, and PostgreSQL
 - Testing: Pytest and Vitest (Playwright later)
-- Deployment: Docker Compose (implemented in FND-02)
+- Deployment: Docker Compose
 
 The platform is a modular monolith. It does not use microservices, message brokers, Redis, Celery, Kafka, or separate optimization services.
 
@@ -24,7 +24,8 @@ tests/          Cross-cutting test workspace (reserved)
 ## Prerequisites
 
 - Node.js 20 or later with npm
-- Python 3.11 or later
+- Python 3.12 or later
+- Docker Desktop for the Compose environment
 
 ## Start the frontend
 
@@ -42,6 +43,35 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 uvicorn app.main:app --reload
+```
+
+## Run with Docker Compose
+
+From the repository root, create your local configuration and start all services:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+Local services:
+
+- Web: http://localhost:5173
+- API: http://localhost:8000
+- API health: http://localhost:8000/health
+- API readiness: http://localhost:8000/ready
+- PostgreSQL: `localhost:5432`
+
+Stop the environment with:
+
+```powershell
+docker compose down
+```
+
+To reset the local database, run the following command. **Warning: it permanently deletes local PostgreSQL data.**
+
+```powershell
+docker compose down --volumes
 ```
 
 ## Run tests and checks
@@ -62,6 +92,6 @@ Use `<jira-key>/<short-kebab-case-description>`, for example `FND-01/initial-mon
 
 ## Current implementation status
 
-FND-01 supplies the initial repository structure, a frontend development home screen, and a FastAPI health endpoint at `GET /health`.
+FND-02 adds a Docker Compose environment with the web, API, and PostgreSQL services. The API exposes `GET /health` for liveness and `GET /ready` for database readiness.
 
-Docker Compose, database integration, migrations, authentication, and the route-planning solver are not implemented yet.
+Database schema migrations and deterministic seed data arrive in FND-03. Authentication and the route-planning solver are not implemented yet.
