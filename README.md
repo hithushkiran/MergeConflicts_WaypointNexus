@@ -54,6 +54,20 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
+## Database foundation (FND-03)
+
+PostgreSQL is authoritative; Alembic owns schema evolution. Obtain the official, Git-ignored datasets separately at `local-data/outlets.csv` and `local-data/vehicles.csv`. They are mounted read-only for Compose seeding and are never baked into images.
+
+```powershell
+cd backend
+alembic upgrade head
+python -m app.seed
+```
+
+The idempotent seed imports 4 roles, Peliyagoda/Kandy depots, 120 outlets, 60 vehicles, and development users: `store.manager@waypoint.local`, `dispatcher@waypoint.local`, `loader@waypoint.local`, and `driver@waypoint.local`. No official calendar is currently available. Reset with `docker compose down -v` (warning: deletes local DB data), then `docker compose up --build`.
+
+See [the foundation handoff](docs/FOUNDATION_HANDOFF.md) for stable development fixtures and module-owner notes.
+
 Local services:
 
 - Web: http://localhost:5173

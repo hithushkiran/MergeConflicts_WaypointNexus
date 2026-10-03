@@ -27,6 +27,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./local-data:/app/local-data:ro
     depends_on:
       db:
         condition: service_healthy
