@@ -18,3 +18,8 @@ Thumbs.db
 
 # Competition datasets - local use only
 local-data/
+
+#agent commands and guids
+!docs/todo.md
+!docs/todo/
+!docs/todo/**
