@@ -13,7 +13,7 @@ This folder is the source of truth for unfinished project work. The old single-f
 
 The repository documents FND-01/FND-03 foundation work, and the API currently exposes health/readiness endpoints. Authentication, planning, and the business workflows are explicitly described in the root README as not implemented. The roadmap has many unchecked foundation tasks that may already be complete. Reconcile each candidate against the current code and tests before changing it; keep the README, handoff, and this board consistent when evidence changes.
 
-No task is claimed by this file. Set the first active task after reviewing repository state; do not assume every unchecked roadmap item is still open.
+T01 is complete. Start T02 (authentication, authorization, and API contracts), following the roadmap requirements and acceptance gates. Do not assume every unchecked roadmap item is still open.
 
 ## Order and gates
 
@@ -37,7 +37,7 @@ P0 work and its acceptance gate must be complete before starting dependent P0 wo
 
 | ID | Workstream | Status | Owner | Depends on | Evidence / blocker |
 | --- | --- | --- | --- | --- | --- |
-| T01 | Reconcile foundation and development setup | in progress | Codex | — | Static review found Compose db/api/web, Alembic migration, seed importer, health/readiness endpoints, and frontend shell. `docker compose config --quiet` passed. Backend pytest and frontend Vitest/build could not start: dependencies are not installed (`pytest`, `vitest`, and `tsc` unavailable). Runtime verification remains. |
+| T01 | Reconcile foundation and development setup | done | Codex | — | Repaired the broken Buildx symlink to `/usr/libexec/docker/cli-plugins/docker-buildx`. Added `httpx2` as the backend dev TestClient dependency and select uvloop for TestClient when available. `docker compose up --build -d` starts db/api/web; API `/health` and `/ready` both return success, with database readiness confirmed. Backend pytest: 8 passed, 1 skipped (optional PostgreSQL integration URL unset). Frontend test (1), typecheck, ESLint, and production build pass. |
 | T02 | Authentication, authorization, and API contracts | open | — | T01 | |
 | T03 | Store order workflow | open | — | T02 | |
 | T04 | Planning and eligibility/allocation | open | — | T03, T02 | |
