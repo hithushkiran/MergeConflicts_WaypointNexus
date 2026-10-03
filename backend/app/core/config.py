@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +13,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://waypoint:waypoint_local_password@db:5432/waypoint_nexus"
     tz: str = "Asia/Colombo"
     cors_origins: str = "http://localhost:5173"
+    dev_seed_password: str | None = None
+    auth_session_ttl_hours: int = Field(default=12, ge=1, le=720)
 
     @property
     def cors_origin_list(self) -> list[str]:

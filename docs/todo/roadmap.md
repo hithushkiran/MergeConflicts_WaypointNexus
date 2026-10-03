@@ -233,15 +233,15 @@ DRIVER
 
 Verify:
 
-* [ ] Store cannot access dispatcher operations.
-* [ ] Dispatcher cannot impersonate driver/store.
-* [ ] Loader can access loading workflow.
-* [ ] Driver can access assigned trip.
-* [ ] Unauthorized API requests return correct errors.
+* [x] Store cannot access dispatcher operations (role guard test returns `403 FORBIDDEN`).
+* [x] Dispatcher cannot impersonate driver/store (login rejects client-supplied role; role is derived from the database).
+* [x] Loader can access loader-only operations (role guard test accepts `LOADER`).
+* [x] Driver role can access driver-only operations (role guard test accepts `DRIVER`); trip assignment scope is deferred to T07 because the trip schema has no assignment field yet.
+* [x] Unauthorized API requests return contract-shaped `401`/`403` errors.
 
 ### Gate
 
-Create automated authorization tests.
+Create automated authorization tests. **Complete:** backend identity tests cover the role matrix and error responses.
 
 **Do not proceed until RBAC tests pass.**
 
@@ -253,16 +253,16 @@ Create automated authorization tests.
 
 Before building the individual interfaces:
 
-* [ ] Define API response structure.
-* [ ] Define API error structure.
-* [ ] Define IDs.
-* [ ] Define enums.
-* [ ] Define state transitions.
-* [ ] Define pagination where needed.
-* [ ] Define event structure.
-* [ ] Define idempotency structure.
+* [x] Define API response structure.
+* [x] Define API error structure.
+* [x] Define IDs.
+* [x] Define enums.
+* [x] Define state transitions.
+* [x] Define pagination where needed.
+* [x] Define event structure.
+* [x] Define idempotency structure.
 
-Document the contracts.
+Document the contracts in `docs/api-contracts.md`.
 
 ### Gate
 

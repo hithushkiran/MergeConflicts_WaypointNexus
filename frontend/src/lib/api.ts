@@ -1,4 +1,94 @@
 const configuredApiUrl = import.meta.env.VITE_API_URL
 
-/** Base URL for future backend API clients. */
+/** Base URL for the versioned backend API. */
 export const API_BASE_URL = configuredApiUrl?.replace(/\/$/, '') ?? 'http://localhost:8000'
+
+const TOKEN_KEY = 'waypoint.access-token'
+
+export type UserRole = 'STORE' | 'DISPATCHER' | 'LOADER' | 'DRIVER'
+
+export interface UserProfile {
+  id: string
+  email: string
+  display_name: string
+  role: UserRole
+  outlet_id: string | null
+  depot_code: string | null
+}
+
+interface LoginResponse {
+  access_token: string
+  token_type: 'bearer'
+  expires_at: string
+  user: UserProfile
+}
+
+interface ApiErrorBody {
+  detail?: {
+    code?: string
+    message?: string
+    fields?: Array<{ field: string; message: string }>
+  }
+}
+
+export class ApiError extends Error {
+  readonly code: string
+  readonly status: number
+  readonly fields: Array<{ field: string; message: string }>
+
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.detail?.message ?? 'The request could not be completed.')
+    this.name = 'ApiError'
+    this.status = status
+    this.code = body.detail?.code ?? 'HTTP_ERROR'
+    this.fields = body.detail?.fields ?? []
+  }
+}
+
+export function getAccessToken(): string | null {
+  return typeof window === 'undefined' ? null : window.sessionStorage.getItem(TOKEN_KEY)
+}
+
+function clearAccessToken(): void {
+  if (typeof window !== 'undefined') window.sessionStorage.removeItem(TOKEN_KEY)
+}
+
+async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
+  const headers = new Headers(init.headers)
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const token = authenticated ? getAccessToken() : null
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+  if (response.status === 204) return undefined as T
+
+  const body = (await response.json()) as T | ApiErrorBody
+  if (!response.ok) {
+    const error = new ApiError(response.status, body as ApiErrorBody)
+    if (error.status === 401 && error.code !== 'INVALID_CREDENTIALS') clearAccessToken()
+    throw error
+  }
+  return body as T
+}
+
+export async function signIn(email: string, password: string): Promise<UserProfile> {
+  const result = await request<LoginResponse>(
+    '/api/v1/auth/login',
+    { method: 'POST', body: JSON.stringify({ email, password }) },
+    false,
+  )
+  window.sessionStorage.setItem(TOKEN_KEY, result.access_token)
+  return result.user
+}
+
+export function currentUser(): Promise<UserProfile> {
+  return request<UserProfile>('/api/v1/auth/me')
+}
+
+export async function signOut(): Promise<void> {
+  try {
+    await request<void>('/api/v1/auth/logout', { method: 'POST' })
+  } finally {
+    clearAccessToken()
+  }
+}
