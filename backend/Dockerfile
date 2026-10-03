@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && if [ -f /app/local-data/outlets.csv ] && [ -f /app/local-data/vehicles.csv ]; then python -m app.seed; else echo 'Official datasets not mounted; starting without seed data.'; fi && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
