@@ -27,6 +27,8 @@ tests/          Cross-cutting test workspace (reserved)
 - Python 3.12 or later
 - Docker Desktop for the Compose environment
 
+For a teammate-oriented setup, sign-in, and testing walkthrough, see the [Team Quick Start](docs/QUICK_START.md).
+
 ## Start the frontend
 
 ```powershell
