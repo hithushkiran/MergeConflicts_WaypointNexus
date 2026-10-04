@@ -85,6 +85,17 @@ Every command that changes workflow state validates its transition on the server
 - Offline sync commands carry a stable `X-Command-Id` in addition to the idempotency key. The server records that ID with the idempotency result; retries preserve the key so duplicate sync cannot repeat the side effect.
 - Event records use `{ "event_id": "uuid", "event_type": "...", "occurred_at": "...", "aggregate_type": "...", "aggregate_id": "...", "actor_id": "uuid|null", "payload": {} }`. Database state remains authoritative; event delivery is advisory.
 
+## Known UI gaps (not yet API contracts)
+
+The Figma screen map and implementation sequence are maintained in [`UI_IMPLEMENTATION_HANDOFF.md`](UI_IMPLEMENTATION_HANDOFF.md). The following capabilities are not defined by this contract and must not be represented as live API-backed behavior until a task adds and documents their contracts:
+
+- Store delivery ETA/plan details, receipt submission, and delivery-issue reporting/review. Receipt and issue database tables exist, but there are no store routes for these workflows yet; define scope, state transitions, idempotency, and role checks under T09 before wiring the UI.
+- Live route monitoring, future-capacity forecasts, telemetry, station controls, and intercom/messaging. Agree data source, freshness, permissions, failure behavior, and acceptance criteria before proposing endpoints.
+- Photo/signature proof-of-delivery upload. Current driver proof supports receiver, outcome, notes, and event times; file storage and upload are not implemented.
+- Editable dispatcher plans, store preferences/profile updates, or a separate gate-release command. Current APIs do not offer these actions; screens should reflect existing state transitions unless a new task defines and implements them.
+
+This section is a gap inventory, not a promise or substitute contract. Add concrete schemas and behavior here when the responsible task is accepted; do not invent endpoint shapes in frontend code.
+
 ## API error example
 
 ```json
