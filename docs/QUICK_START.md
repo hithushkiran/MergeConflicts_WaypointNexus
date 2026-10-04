@@ -47,6 +47,8 @@ On a fresh local database, use one of the seeded accounts with the development p
 
 The password is set when a development user is first seeded. Changing `DEV_SEED_PASSWORD` later does not replace an existing password hash. Keep this shared development credential local; do not use it for a deployed environment.
 
+The driver workspace saves assigned trips and acknowledged manifests in this browser for offline use. Open the trip while connected at least once before going offline. The browser stores queued driver actions on this device and syncs them in order after reconnecting. Localhost supports the offline app shell; deployments need HTTPS for service workers. Clearing site data removes unsynced local work.
+
 ## Run checks
 
 Frontend checks:
@@ -99,4 +101,3 @@ Avoid `docker compose down -v` unless you intentionally want to permanently dele
 - `docs/api-contracts.md` — versioned API contracts
 - `docs/todo/README.md` and `docs/todo/roadmap.md` — work queue and roadmap
 - `docs/FOUNDATION_HANDOFF.md` — foundation and module handoff notes
-

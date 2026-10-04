@@ -692,13 +692,13 @@ Only now build the driver experience.
 
 ## 14.1 Trip
 
-* [ ] Trip summary.
-* [ ] Vehicle.
-* [ ] Driver.
-* [ ] Stops.
-* [ ] Outlet information.
-* [ ] Delivery windows.
-* [ ] Instructions.
+* [x] Trip summary.
+* [x] Vehicle.
+* [x] Driver.
+* [x] Stops.
+* [x] Outlet information.
+* [x] Delivery windows.
+* [x] Instructions.
 
 ## 14.2 Stop workflow
 
@@ -742,12 +742,12 @@ Driver must receive only the current acknowledged manifest.
 
 Implement:
 
-* [ ] Receiver.
-* [ ] Outcome.
-* [ ] Timestamp.
-* [ ] Notes.
-* [ ] Signature/photo reference if supported.
-* [ ] Validation.
+* [x] Receiver.
+* [x] Outcome.
+* [x] Timestamp.
+* [x] Notes.
+* [x] Signature/photo reference if supported (no upload/object storage exists; receiver and notes are persisted).
+* [x] Validation.
 
 ### Gate 6 — ONLINE DELIVERY
 
@@ -779,11 +779,11 @@ This should be treated as a separate engineering milestone rather than a UI feat
 
 Implement IndexedDB/local persistence for:
 
-* [ ] Trip.
-* [ ] Stops.
-* [ ] Manifest version.
-* [ ] Delivery drafts.
-* [ ] Schema version.
+* [x] Trip.
+* [x] Stops.
+* [x] Manifest version.
+* [x] Delivery drafts.
+* [x] Schema version.
 
 ### Test
 
@@ -807,12 +807,12 @@ If this doesn't work, stop.
 
 Implement:
 
-* [ ] Command queue.
-* [ ] Pending status.
-* [ ] Retry.
-* [ ] Backoff.
-* [ ] Persistence after reload.
-* [ ] Connectivity indicator.
+* [x] Command queue.
+* [x] Pending status.
+* [x] Retry.
+* [x] Backoff.
+* [x] Persistence after reload.
+* [x] Connectivity indicator.
 
 Example:
 
@@ -843,11 +843,11 @@ idempotency_key
 
 Implement:
 
-* [ ] Server acknowledgement.
-* [ ] Duplicate detection.
-* [ ] Retry.
-* [ ] Sync error.
-* [ ] Conflict handling.
+* [x] Server acknowledgement.
+* [x] Duplicate detection.
+* [x] Retry.
+* [x] Sync error.
+* [x] Conflict handling.
 
 ### Critical test
 
@@ -898,6 +898,8 @@ Server accepts once
  ↓
 Duplicate sync is ignored
 ```
+
+**T08 verification:** IndexedDB tests restore cached trip/manifest data, delivery drafts, and queued commands; simulate a lost response and retry with unchanged command/idempotency IDs and event time; and verify a conflict blocks later commands. Backend acceptance confirms replay creates only one POD. The app shell was reloaded while the web service was stopped. No assigned trip exists in the shared development database, so the full driver UI journey is covered by fixtures rather than mutating the shared demo data.
 
 ---
 

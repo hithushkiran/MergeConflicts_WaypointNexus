@@ -1,15 +1,19 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import {
   ApiError,
   acknowledgeManifest,
+  assignTripDriver,
   createDispatcherPlan,
   createStoreOrder,
   currentUser,
+  getCachedDriverProfile,
   getDispatcherPlan,
   getAccessToken,
   getOrderEligibility,
   listDispatcherOrders,
+  listDispatcherDrivers,
+  listDriverTrips,
   listDispatcherPlans,
   listLoaderTrips,
   listManifestVersions,
@@ -23,6 +27,7 @@ import {
   type DispatcherFilters,
   type DispatcherOrder,
   type DispatcherPlan,
+  type DriverTrip,
   type LoaderTrip,
   type ShortfallItem,
   type OrderEligibility,
@@ -30,6 +35,17 @@ import {
   type TemperatureRequirement,
   type UserProfile,
 } from '../lib/api'
+import {
+  applyPendingCommands,
+  cacheDriverTrips,
+  enqueueDriverCommand,
+  readCachedDriverTrips,
+  readDriverOutbox,
+  saveDeliveryDraft,
+  syncDriverOutbox,
+  type DriverCommandInput,
+  type QueuedDriverCommand,
+} from '../lib/driverOffline'
 
 function StoreOrders() {
   const [orders, setOrders] = useState<StoreOrder[]>([])
@@ -234,7 +250,7 @@ function LoaderWorkspace() {
 
   return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="loader-heading">
     <h2 id="loader-heading" className="text-xl font-bold">Loading bay</h2>
-    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest. Driver assignment is not available yet.</p>
+    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest, then acknowledge the version drivers may use.</p>
     {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
       <label className="mt-4 block text-sm">Published trip<select className={fieldClass} value={selected} onChange={(event) => setSelected(event.target.value)}>{trips.map((item) => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
       {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · Driver unassigned</div>
@@ -263,6 +279,113 @@ function LoaderWorkspace() {
       </>}
     </>}
     {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}
+  </section>
+}
+
+function DriverWorkspace() {
+  const [user] = useState<UserProfile | null>(() => getCachedDriverProfile())
+  const [trips, setTrips] = useState<DriverTrip[]>([])
+  const [receiver, setReceiver] = useState<Record<string, string>>({})
+  const [notes, setNotes] = useState<Record<string, string>>({})
+  const [error, setError] = useState('')
+  const [working, setWorking] = useState(false)
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine)
+  const [serverConnected, setServerConnected] = useState(true)
+  const [outbox, setOutbox] = useState<QueuedDriverCommand[]>([])
+  const [syncing, setSyncing] = useState(false)
+  const userId = user?.id
+
+  const refresh = useCallback(async () => {
+    if (!userId) return
+    let freshTrips: DriverTrip[] = []
+    let hadNetworkError = false
+    try {
+      freshTrips = await listDriverTrips()
+      setServerConnected(true)
+      await cacheDriverTrips(userId, freshTrips)
+    } catch {
+      setServerConnected(false)
+      hadNetworkError = true
+      freshTrips = await readCachedDriverTrips(userId)
+    }
+    const queued = await readDriverOutbox(userId)
+    setOutbox(queued)
+    setTrips(applyPendingCommands(freshTrips, queued))
+    const conflict = queued.find((entry) => entry.state === 'CONFLICT')
+    const transientFailure = queued.find((entry) => entry.state === 'PENDING' && entry.error)
+    if (conflict) setError(`A delivery update needs attention: ${conflict.error ?? 'the server could not accept the change.'}`)
+    else if (transientFailure) setError(`A connection issue delayed sync. The update will retry automatically: ${transientFailure.error}`)
+    else if (hadNetworkError && freshTrips.length === 0) setError('No saved trips are available offline. Open your assigned trips while connected to save them for offline use.')
+    else if (!hadNetworkError) setError('')
+  }, [userId])
+
+  const sync = useCallback(async () => {
+    if (!userId) return
+    setSyncing(true)
+    try {
+      const result = await syncDriverOutbox(userId)
+      setOutbox(result.pending)
+      if (result.pending.some((entry) => entry.state === 'CONFLICT')) {
+        const conflict = result.pending.find((entry) => entry.state === 'CONFLICT')
+        setError(`A delivery update needs attention: ${conflict?.error ?? 'the server could not accept the change.'}`)
+      } else if (result.pending.length === 0) setError('')
+      await refresh()
+      if (result.next_attempt_at && navigator.onLine) {
+        window.setTimeout(() => { void sync() }, Math.max(500, result.next_attempt_at - Date.now()))
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Offline updates could not be saved.')
+    } finally { setSyncing(false) }
+  }, [refresh, userId])
+
+  useEffect(() => {
+    void refresh().then(() => { if (navigator.onLine) void sync() }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not open saved trips.'))
+    const update = () => {
+      setOnline(navigator.onLine)
+      if (navigator.onLine) void sync()
+    }
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+  }, [refresh, sync, userId])
+
+  async function queue(command: DriverCommandInput) {
+    if (!userId) { setError('Sign in while connected once to enable offline delivery work.'); return }
+    setWorking(true); setError('')
+    try {
+      await enqueueDriverCommand(userId, command)
+      await refresh()
+      if (navigator.onLine) void sync()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save the delivery update offline.') }
+    finally { setWorking(false) }
+  }
+  const field = 'mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-slate-50'
+  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="driver-heading">
+    <h2 id="driver-heading" className="text-xl font-bold">My delivery trips</h2>
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm"><span className={online && serverConnected ? 'text-emerald-300' : 'text-amber-200'}>{online && serverConnected ? 'Connected' : 'Offline · saved on this device'} · {outbox.length} update{outbox.length === 1 ? '' : 's'} waiting{syncing ? ' · syncing…' : ''}</span><button className="rounded border border-slate-600 px-3 py-1.5 disabled:opacity-50" disabled={!online || syncing || outbox.length === 0} onClick={() => void sync()} type="button">Sync now</button></div>
+    <p className="mt-2 text-sm text-slate-400">Trips and acknowledged manifest details are saved on this device while connected.</p>
+    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No ready or active trips are assigned to you.</p> : <div className="mt-4 space-y-4">{trips.map((trip) => <article key={trip.id} className="rounded-xl border border-slate-700 p-4">
+      <h3 className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</h3>
+      <p className="mt-1 text-xs text-slate-400">{trip.depot_code} · Plan V{trip.plan_version} · Acknowledged manifest V{trip.manifest_version} · {trip.status}</p>
+      {trip.manifest && <details className="mt-2 text-xs text-slate-300"><summary>Manifest V{trip.manifest.version_number} · {trip.manifest.lines.length} orders</summary><ul className="mt-2 space-y-1">{trip.manifest.lines.map((line) => <li key={line.order_id}>{line.sequence_number}. {line.order_ref} · {line.outlet_id} · {line.loaded_quantity}/{line.expected_quantity} · {line.status}</li>)}</ul></details>}
+      {trip.status === 'READY' && <button className="mt-3 rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working} onClick={() => void queue({ kind: 'DEPART', trip_id: trip.id })}>Start trip</button>}
+      <ol className="mt-4 space-y-3">{trip.stops.map((stop, stopIndex) => {
+        const previousStopsDone = trip.stops.slice(0, stopIndex).every((previous) => previous.status === 'DELIVERED' || previous.status === 'FAILED')
+        const localPending = outbox.some((entry) => entry.command.trip_id === trip.id && 'stop_id' in entry.command && entry.command.stop_id === stop.id)
+        return <li key={stop.id} className="rounded-lg bg-slate-950 p-3">
+        <p className="font-semibold">{stop.sequence_number}. {stop.order_ref} · {stop.outlet_id}</p>
+        <p className="mt-1 text-sm text-slate-300">{stop.district}{stop.window_open_time && stop.window_close_time ? ` · ${stop.window_open_time}–${stop.window_close_time}` : ''}{stop.planned_arrival ? ` · ETA ${new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' })}` : ''}</p>
+        {stop.instructions && <p className="mt-1 text-sm text-amber-200">Instructions: {stop.instructions}</p>}
+        <p className="mt-1 text-xs text-slate-400">Status: {stop.status}{localPending ? ' · waiting to sync' : ''}</p>
+        {trip.status === 'IN_PROGRESS' && stop.status === 'PENDING' && previousStopsDone && <button className="mt-2 rounded border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => void queue({ kind: 'ARRIVE', trip_id: trip.id, stop_id: stop.id })}>Arrived</button>}
+        {trip.status === 'IN_PROGRESS' && stop.status === 'ARRIVED' && <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-xs text-slate-300">Receiver name<input className={field} value={receiver[stop.id] ?? stop.receiver_name ?? ''} onChange={(event) => { const value = event.target.value; setReceiver((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, value, notes[stop.id] ?? stop.delivery_notes ?? '') }} /></label>
+          <label className="text-xs text-slate-300">Delivery notes or failure reason<input className={field} value={notes[stop.id] ?? stop.delivery_notes ?? ''} onChange={(event) => { const value = event.target.value; setNotes((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, receiver[stop.id] ?? stop.receiver_name ?? '', value) }} /></label>
+          <div className="flex gap-2 sm:col-span-2"><button className="rounded bg-emerald-400 px-3 py-2 font-semibold text-slate-950" disabled={working || !receiver[stop.id]?.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'DELIVERED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' })}>Delivered</button><button className="rounded border border-rose-700 px-3 py-2" disabled={working || !notes[stop.id]?.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'FAILED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' })}>Failed delivery</button></div>
+        </div>}
+      </li>})}</ol>
+    </article>)}</div>}
+    {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}
   </section>
 }
 
@@ -328,6 +451,8 @@ function ShortfallWorkspace() {
 }
 
 function DispatcherWorkspace() {
+  const [drivers, setDrivers] = useState<Array<{ id: string; display_name: string; email: string; depot_code: string | null }>>([])
+  const [driverSelections, setDriverSelections] = useState<Record<string, string>>({})
   const [filters, setFilters] = useState<DispatcherFilters>({})
   const [orders, setOrders] = useState<DispatcherOrder[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
@@ -338,6 +463,19 @@ function DispatcherWorkspace() {
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  useEffect(() => { listDispatcherDrivers().then(setDrivers).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load drivers.')) }, [])
+
+  async function assignDriver(tripId: string, driverId: string) {
+    if (!driverId) return
+    setWorking(true); setError(''); setNotice('')
+    try {
+      await assignTripDriver(tripId, driverId)
+      if (plan) setPlan(await getDispatcherPlan(plan.id))
+      setNotice('Driver assigned to the trip.')
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not assign the driver.') }
+    finally { setWorking(false) }
+  }
 
   useEffect(() => {
     let active = true
@@ -501,6 +639,7 @@ function DispatcherWorkspace() {
           {plan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-4" key={trip.id}>
             <h4 className="font-semibold">{trip.brand} · {trip.district} · {trip.vehicle_id} · Trip {trip.trip_number}</h4>
             <p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg ({trip.metrics.weight_utilization_pct}% capacity) · {trip.metrics.volume_m3} m³ ({trip.metrics.volume_utilization_pct}% capacity) · {trip.metrics.distance_km} km · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p>
+            {plan.status === 'PUBLISHED' && <div className="mt-3 flex flex-wrap items-end gap-2"><label className="text-xs text-slate-300">Driver for {trip.depot_code}<select className={`${inputClass} mt-1 block`} value={driverSelections[trip.id] ?? trip.assigned_driver_id ?? ''} onChange={(event) => setDriverSelections((state) => ({ ...state, [trip.id]: event.target.value }))}><option value="">Choose driver</option>{drivers.filter((driver) => driver.depot_code === trip.depot_code).map((driver) => <option key={driver.id} value={driver.id}>{driver.display_name}</option>)}</select></label><button className="rounded-lg border border-cyan-700 px-3 py-2 text-sm disabled:opacity-50" disabled={working || !(driverSelections[trip.id] ?? trip.assigned_driver_id)} onClick={() => assignDriver(trip.id, driverSelections[trip.id] ?? trip.assigned_driver_id ?? '')}>{trip.assigned_driver_name ? `Assigned: ${trip.assigned_driver_name} · change` : 'Assign driver'}</button></div>}
             <ol className="mt-3 space-y-2 border-l border-slate-700 pl-4 text-sm">{trip.stops.map((stop) => <li key={stop.order_id}><strong>{stop.sequence_number}. {stop.order_ref}</strong> · {stop.outlet_id} · ETA {stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) : 'not set'} · {stop.planned_service_minutes} min service</li>)}</ol>
           </article>)}
         </div>
@@ -538,12 +677,14 @@ function App() {
     if (!getAccessToken()) return
 
     let active = true
-    currentUser()
+      currentUser()
       .then((profile) => {
         if (active) setUser(profile)
       })
       .catch((cause: unknown) => {
-        if (active) setError(cause instanceof ApiError ? cause.message : 'Could not restore your session.')
+        const cachedProfile = getCachedDriverProfile()
+        if (active && cachedProfile && (!(cause instanceof ApiError) || cause.status >= 500)) setUser(cachedProfile)
+        else if (active) setError(cause instanceof ApiError ? cause.message : 'Could not restore your session.')
       })
       .finally(() => {
         if (active) setCheckingSession(false)
@@ -614,11 +755,7 @@ function App() {
               <dd className="mt-1 font-semibold">{scope}</dd>
             </div>
           </dl>
-          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : (
-            <p className="mt-8 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">
-              You are signed in. Available workflows will appear here as they are implemented for your role.
-            </p>
-          )}
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
           {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
         </section>
       </main>

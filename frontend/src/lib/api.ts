@@ -4,6 +4,7 @@ const configuredApiUrl = import.meta.env.VITE_API_URL
 export const API_BASE_URL = configuredApiUrl?.replace(/\/$/, '') ?? 'http://localhost:8000'
 
 const TOKEN_KEY = 'waypoint.access-token'
+const PROFILE_KEY = 'waypoint.driver-profile'
 
 export type UserRole = 'STORE' | 'DISPATCHER' | 'LOADER' | 'DRIVER'
 
@@ -100,12 +101,23 @@ export interface PlanStop {
 export interface PlanTrip {
   id: string
   vehicle_id: string
+  depot_code: string
+  assigned_driver_id: string | null
+  assigned_driver_name: string | null
   trip_number: number
   brand: string
   district: string
   status: string
   metrics: Record<string, number | boolean>
   stops: PlanStop[]
+}
+
+export interface DriverTrip {
+  id: string; vehicle_id: string; vehicle_type: string | null; depot_code: string | null
+  driver_name: string | null; trip_number: number; brand: string; district: string; status: string
+  plan_version: number | null; manifest_version: number | null
+  manifest: { version_number: number; lines: Array<{ order_id: string; order_ref: string; outlet_id: string; sequence_number: number; expected_quantity: number; loaded_quantity: number; status: string; notes: string | null }> } | null
+  stops: Array<{ id: string; sequence_number: number; order_id: string; order_ref: string; outlet_id: string; brand: string; district: string; window_open_time: string | null; window_close_time: string | null; instructions: string | null; planned_arrival: string | null; planned_service_minutes: number | null; status: string; arrived_at: string | null; completed_at: string | null; receiver_name?: string; delivery_notes?: string }>
 }
 
 export interface PlanDecision {
@@ -172,6 +184,30 @@ export async function listLoaderTrips(): Promise<LoaderTrip[]> {
   return (await request<{ items: LoaderTrip[] }>('/api/v1/loader/trips')).items
 }
 
+export async function listDispatcherDrivers(): Promise<Array<{ id: string; display_name: string; email: string; depot_code: string | null }>> {
+  return (await request<{ items: Array<{ id: string; display_name: string; email: string; depot_code: string | null }> }>('/api/v1/dispatcher/drivers')).items
+}
+
+export function assignTripDriver(tripId: string, driverId: string): Promise<{ trip_id: string; driver_id: string; driver_name: string }> {
+  return request(`/api/v1/dispatcher/trips/${tripId}/assign`, { method: 'POST', body: JSON.stringify({ driver_id: driverId }) })
+}
+
+export async function listDriverTrips(): Promise<DriverTrip[]> {
+  return (await request<{ items: DriverTrip[] }>('/api/v1/driver/trips')).items
+}
+
+export function departDriverTrip(tripId: string, idempotencyKey: string = crypto.randomUUID(), commandId?: string, occurredAt?: string): Promise<{ trip_id: string; status: string }> {
+  return request(`/api/v1/driver/trips/${tripId}/depart`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey, ...(commandId ? { 'X-Command-Id': commandId } : {}) }, ...(occurredAt ? { body: JSON.stringify({ occurred_at: occurredAt }) } : {}) })
+}
+
+export function arriveDriverStop(stopId: string, idempotencyKey: string = crypto.randomUUID(), commandId?: string, occurredAt?: string): Promise<{ stop_id: string; status: string }> {
+  return request(`/api/v1/driver/stops/${stopId}/arrive`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey, ...(commandId ? { 'X-Command-Id': commandId } : {}) }, ...(occurredAt ? { body: JSON.stringify({ occurred_at: occurredAt }) } : {}) })
+}
+
+export function completeDriverStop(stopId: string, payload: { outcome: 'DELIVERED' | 'FAILED'; receiver_name: string; notes: string; occurred_at?: string }, idempotencyKey: string = crypto.randomUUID(), commandId?: string): Promise<{ stop_id: string; status: string; trip_status: string }> {
+  return request(`/api/v1/driver/stops/${stopId}/complete`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey, ...(commandId ? { 'X-Command-Id': commandId } : {}) }, body: JSON.stringify(payload) })
+}
+
 export async function listManifestVersions(tripId: string): Promise<LoaderTrip['manifest'][]> {
   return (await request<{ items: LoaderTrip['manifest'][] }>(`/api/v1/loader/trips/${tripId}/manifests`)).items
 }
@@ -218,6 +254,18 @@ export function getAccessToken(): string | null {
   return typeof window === 'undefined' ? null : window.sessionStorage.getItem(TOKEN_KEY)
 }
 
+export function getCachedDriverProfile(): UserProfile | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(PROFILE_KEY)
+    if (!raw) return null
+    const profile = JSON.parse(raw) as UserProfile
+    return profile.role === 'DRIVER' && Boolean(profile.id) ? profile : null
+  } catch {
+    return null
+  }
+}
+
 function clearAccessToken(): void {
   if (typeof window !== 'undefined') window.sessionStorage.removeItem(TOKEN_KEY)
 }
@@ -247,11 +295,14 @@ export async function signIn(email: string, password: string): Promise<UserProfi
     false,
   )
   window.sessionStorage.setItem(TOKEN_KEY, result.access_token)
+  if (result.user.role === 'DRIVER') window.localStorage.setItem(PROFILE_KEY, JSON.stringify(result.user))
   return result.user
 }
 
-export function currentUser(): Promise<UserProfile> {
-  return request<UserProfile>('/api/v1/auth/me')
+export async function currentUser(): Promise<UserProfile> {
+  const profile = await request<UserProfile>('/api/v1/auth/me')
+  if (profile.role === 'DRIVER') window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
+  return profile
 }
 
 export function getOrderEligibility(): Promise<OrderEligibility> {
@@ -326,5 +377,6 @@ export async function signOut(): Promise<void> {
     await request<void>('/api/v1/auth/logout', { method: 'POST' })
   } finally {
     clearAccessToken()
+    if (typeof window !== 'undefined') window.localStorage.removeItem(PROFILE_KEY)
   }
 }

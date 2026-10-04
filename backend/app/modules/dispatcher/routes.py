@@ -21,9 +21,12 @@ from app.infrastructure.persistence import (
     Outlet,
     PlanVersion,
     PlanningRun,
+    Role,
     Shortfall,
     Trip,
     TripStop,
+    User,
+    Vehicle,
 )
 from app.modules.dispatcher.schemas import (
     DispatcherOrderList,
@@ -42,6 +45,47 @@ from app.modules.planning.snapshot import build_planning_snapshot, persist_plann
 
 
 router = APIRouter(prefix="/api/v1/dispatcher", tags=["dispatcher"])
+
+
+@router.get("/drivers")
+def list_drivers(principal=Depends(require_roles("DISPATCHER")), db: Session = Depends(get_db_session)) -> dict:
+    rows = db.execute(select(User).join(Role, Role.id == User.role_id).where(Role.code == "DRIVER", User.active.is_(True)).order_by(User.display_name)).scalars().all()
+    return {"items": [{"id": str(user.id), "display_name": user.display_name, "email": user.email, "depot_code": user.depot_code} for user in rows]}
+
+
+@router.post("/trips/{trip_id}/assign")
+def assign_driver(trip_id: UUID, payload: dict, principal=Depends(require_roles("DISPATCHER")), db: Session = Depends(get_db_session)) -> dict:
+    try:
+        driver_id = UUID(str(payload.get("driver_id", "")))
+    except ValueError:
+        raise api_error(422, "INVALID_DRIVER", "Choose an active driver account.") from None
+    trip = db.get(Trip, trip_id)
+    driver_user = db.get(User, driver_id)
+    if trip is None:
+        raise api_error(404, "TRIP_NOT_FOUND", "The trip was not found.")
+    role = db.get(Role, driver_user.role_id) if driver_user else None
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    plan = db.get(PlanVersion, trip.plan_version_id)
+    run = db.get(PlanningRun, plan.planning_run_id) if plan else None
+    current = db.scalar(select(PlanVersion).join(PlanningRun).where(PlanningRun.planning_date == run.planning_date, PlanVersion.status == "PUBLISHED").order_by(PlanVersion.published_at.desc(), PlanVersion.created_at.desc())) if run else None
+    if not driver_user or not driver_user.active or not role or role.code != "DRIVER":
+        raise api_error(422, "INVALID_DRIVER", "Choose an active driver account.")
+    if not vehicle or not plan or plan.status != "PUBLISHED" or current is None or current.id != plan.id:
+        raise api_error(409, "TRIP_NOT_CURRENT", "Only trips in the current published plan can be assigned.")
+    if driver_user.depot_code != vehicle.depot_code:
+        raise api_error(422, "DEPOT_MISMATCH", "The driver and vehicle must belong to the same depot.")
+    if trip.status not in {"PLANNED", "LOADING", "READY"}:
+        raise api_error(409, "TRIP_NOT_ASSIGNABLE", "This trip can no longer be assigned.")
+    if db.scalar(select(Shortfall.id).where(Shortfall.trip_id == trip.id, Shortfall.status == "OPEN", Shortfall.blocking.is_(True)).limit(1)):
+        raise api_error(409, "TRIP_ON_HOLD", "Resolve the blocking loading exception before assigning this trip.")
+    conflict = db.scalar(select(Trip.id).where(Trip.assigned_driver_id == driver_id, Trip.status.in_(["READY", "IN_PROGRESS"]), Trip.id != trip.id).limit(1))
+    if conflict:
+        raise api_error(409, "DRIVER_BUSY", "This driver already has an active trip.")
+    old_driver = trip.assigned_driver_id
+    trip.assigned_driver_id = driver_id
+    db.add(AuditEvent(aggregate_type="TRIP", aggregate_id=str(trip.id), action="DRIVER_ASSIGNED", actor_id=principal.user.id, old_state={"driver_id": str(old_driver) if old_driver else None}, new_state={"driver_id": str(driver_id)}))
+    db.commit()
+    return {"trip_id": str(trip.id), "driver_id": str(driver_id), "driver_name": driver_user.display_name}
 
 
 def _order_read(order: Order, outlet: Outlet, prior_day_deferral: bool) -> DispatcherOrderRead:
@@ -86,7 +130,10 @@ def _plan_read(db: Session, version: PlanVersion, diagnostics: list[str] | None 
         trip_output.append({
             "id": str(trip.id),
             "vehicle_id": trip.vehicle_id,
+            "depot_code": db.get(Vehicle, trip.vehicle_id).depot_code,
             "trip_number": trip.trip_number,
+            "assigned_driver_id": str(trip.assigned_driver_id) if trip.assigned_driver_id else None,
+            "assigned_driver_name": db.get(User, trip.assigned_driver_id).display_name if trip.assigned_driver_id else None,
             "brand": trip.brand,
             "district": trip.district,
             "status": trip.status,

@@ -21,7 +21,6 @@ from app.modules.planning.reference_data import PlanningReferenceData
 
 loader = APIRouter(prefix="/api/v1/loader", tags=["loading"])
 dispatcher = APIRouter(prefix="/api/v1/dispatcher", tags=["shortfalls"])
-driver = APIRouter(prefix="/api/v1/driver", tags=["departure"])
 
 
 class CheckLine(BaseModel):
@@ -309,13 +308,3 @@ def resolve_shortfall(shortfall_id: UUID, payload: ResolveRequest, principal: Pr
         trip.status = "LOADING"
     db.commit()
     return {"shortfall_id": str(item.id), "status": item.status, "manifest": _manifest_read(db, new), "trip_status": trip.status}
-
-
-@driver.post("/trips/{trip_id}/depart")
-def depart_trip(trip_id: UUID, principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
-    trip = db.get(Trip, trip_id)
-    if trip is None:
-        raise api_error(404, "TRIP_NOT_FOUND", "The trip was not found.")
-    if trip.status == "DISPATCH_HOLD":
-        raise api_error(409, "DEPARTURE_BLOCKED", "This trip is on dispatch hold until the loading exception is resolved.")
-    raise api_error(409, "TRIP_NOT_READY", "This trip is not assigned and ready for departure.")
