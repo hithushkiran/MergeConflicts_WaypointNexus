@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app import seed
@@ -34,3 +36,56 @@ def test_rows_rejects_invalid_vehicle_numeric_value(tmp_path, monkeypatch):
     monkeypatch.setattr(seed, "DATA_DIR", tmp_path)
     with pytest.raises(RuntimeError, match="invalid numeric"):
         seed.rows("vehicles.csv", {"vehicle_id", "weight_cap_kg", "volume_cap_m3", "km_per_l", "weekly_fuel_quota_l"})
+
+
+def test_development_prefers_official_data_when_both_files_exist(tmp_path, monkeypatch):
+    official = tmp_path / "official"
+    demo = tmp_path / "demo"
+    official.mkdir()
+    demo.mkdir()
+    (official / "outlets.csv").touch()
+    (official / "vehicles.csv").touch()
+    monkeypatch.setattr(seed, "DATA_DIR", official)
+    monkeypatch.setattr(seed, "DEMO_DATA_DIR", demo)
+    monkeypatch.setattr(seed, "get_settings", lambda: SimpleNamespace(app_env="development"))
+
+    assert seed.select_dataset() == (official, False)
+
+
+def test_development_falls_back_to_demo_data_only_when_official_pair_is_absent(tmp_path, monkeypatch):
+    official = tmp_path / "official"
+    demo = tmp_path / "demo"
+    official.mkdir()
+    demo.mkdir()
+    monkeypatch.setattr(seed, "DATA_DIR", official)
+    monkeypatch.setattr(seed, "DEMO_DATA_DIR", demo)
+    monkeypatch.setattr(seed, "get_settings", lambda: SimpleNamespace(app_env="development"))
+
+    assert seed.select_dataset() == (demo, True)
+
+
+def test_partial_official_data_fails_instead_of_mixing_with_demo(tmp_path, monkeypatch):
+    official = tmp_path / "official"
+    demo = tmp_path / "demo"
+    official.mkdir()
+    demo.mkdir()
+    (official / "outlets.csv").touch()
+    monkeypatch.setattr(seed, "DATA_DIR", official)
+    monkeypatch.setattr(seed, "DEMO_DATA_DIR", demo)
+    monkeypatch.setattr(seed, "get_settings", lambda: SimpleNamespace(app_env="development"))
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        seed.select_dataset()
+
+
+def test_demo_data_is_disabled_outside_development(tmp_path, monkeypatch):
+    official = tmp_path / "official"
+    demo = tmp_path / "demo"
+    official.mkdir()
+    demo.mkdir()
+    monkeypatch.setattr(seed, "DATA_DIR", official)
+    monkeypatch.setattr(seed, "DEMO_DATA_DIR", demo)
+    monkeypatch.setattr(seed, "get_settings", lambda: SimpleNamespace(app_env="production"))
+
+    with pytest.raises(RuntimeError, match="disabled outside development"):
+        seed.select_dataset()

@@ -63,6 +63,16 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Order(Base):
     __tablename__ = "orders"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -116,7 +126,10 @@ class Trip(Base):
     status: Mapped[str] = mapped_column(String(32))
     metrics: Mapped[dict | None] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
-    __table_args__ = (UniqueConstraint("plan_version_id", "trip_number"),)
+    __table_args__ = (UniqueConstraint(
+        "plan_version_id", "vehicle_id", "trip_number",
+        name="uq_trips_plan_version_vehicle_trip",
+    ),)
 
 
 class TripStop(Base):

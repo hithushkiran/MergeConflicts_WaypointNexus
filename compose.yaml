@@ -22,6 +22,9 @@ services:
       context: ./backend
     environment:
       APP_ENV: ${APP_ENV:-development}
+      DEV_SEED_PASSWORD: ${DEV_SEED_PASSWORD:-waypoint-local-demo}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-12}
+      ORDER_CUTOFF_LOCAL_TIME: ${ORDER_CUTOFF_LOCAL_TIME:-16:00}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://waypoint:waypoint_local_password@db:5432/waypoint_nexus}
       TZ: ${TZ:-Asia/Colombo}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}

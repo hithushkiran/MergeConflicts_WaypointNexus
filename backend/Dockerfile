@@ -7,11 +7,12 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY demo-data ./demo-data
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout 300 --retries 10 .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && if [ -f /app/local-data/outlets.csv ] && [ -f /app/local-data/vehicles.csv ]; then python -m app.seed; elif [ -f /app/local-data/outlets.csv ] || [ -f /app/local-data/vehicles.csv ]; then echo 'Incomplete official dataset: both outlets.csv and vehicles.csv are required.'; exit 1; elif [ \"$APP_ENV\" = development ]; then python -m app.seed --demo-only; else echo 'Official datasets not mounted; starting without seed data.'; fi && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

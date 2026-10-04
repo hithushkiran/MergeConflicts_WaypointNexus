@@ -1,0 +1,6 @@
+outlet_id,brand,district,depot,dock_type,parking_constraint,mall_window,window_open_time,window_close_time
+DEMO-OUT001,DEMO FRESH,Colombo,Peliyagoda,STANDARD,NONE,,,
+DEMO-OUT015,DEMO STYLE,Kandy,Kandy,STANDARD,NONE,,,
+DEMO-OUT021,DEMO TECH,Gampaha,Peliyagoda,STANDARD,NONE,,,
+DEMO-OUT031,Fresh,Colombo,Peliyagoda,STANDARD,VAN_ONLY,City Mall,05:30,08:00
+DEMO-OUT032,Fresh,Colombo,Peliyagoda,STANDARD,NONE,,04:30,08:00
