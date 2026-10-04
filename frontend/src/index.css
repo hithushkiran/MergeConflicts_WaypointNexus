@@ -10,4 +10,222 @@
 
 body {
   margin: 0;
+  min-width: 320px;
+  background: #f4f7fb;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 3px solid #22d3ee;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -5rem;
+  z-index: 20;
+  border-radius: 0.5rem;
+  background: #0f2741;
+  color: white;
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+.app-shell {
+  min-height: 100vh;
+  color: #10253d;
+}
+
+.app-header {
+  background: #0f2741;
+  color: white;
+}
+
+.app-header__inner,
+.role-nav__inner,
+.workspace-main {
+  width: min(1180px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.app-header__inner {
+  display: flex;
+  min-height: 5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: white;
+  font-size: 1.1rem;
+  text-decoration: none;
+}
+
+.brand__mark {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.55rem;
+  background: #22c1dc;
+  color: #0f2741;
+  font-weight: 900;
+}
+
+.brand__muted,
+.account-context__scope {
+  color: #b7c9db;
+}
+
+.account-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.account-context {
+  display: grid;
+  text-align: right;
+  font-size: 0.8rem;
+}
+
+.account-context__name {
+  font-weight: 700;
+}
+
+.role-badge {
+  border: 1px solid #4a789f;
+  border-radius: 999px;
+  color: #b8f4fb;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.header-action {
+  border: 1px solid #66839d;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.header-action:hover {
+  background: #193b5c;
+}
+
+.role-nav {
+  border-bottom: 1px solid #dbe4ee;
+  background: white;
+}
+
+.role-nav__inner {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+}
+
+.role-nav a {
+  flex: 0 0 auto;
+  border-bottom: 3px solid transparent;
+  color: #526477;
+  padding: 0.9rem 1rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.role-nav a:hover {
+  border-bottom-color: #22a9c1;
+  color: #10253d;
+}
+
+.workspace-main {
+  padding: 2.25rem 0 4rem;
+}
+
+.workspace-intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #dbe4ee;
+  padding-bottom: 1.5rem;
+}
+
+.workspace-intro h1 {
+  margin: 0.35rem 0 0;
+  color: #10253d;
+  font-size: clamp(1.55rem, 3vw, 2.25rem);
+  letter-spacing: -0.03em;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #1765c1;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workspace-intro__hint {
+  max-width: 18rem;
+  margin: 0;
+  color: #64748b;
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+.workspace-content > section:first-child {
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .app-header__inner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 1rem 0;
+  }
+
+  .account-bar {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .account-context {
+    text-align: left;
+  }
+
+  .workspace-main {
+    padding-top: 1.5rem;
+  }
+
+  .workspace-intro {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-intro__hint {
+    text-align: left;
+  }
 }
