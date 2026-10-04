@@ -2,13 +2,21 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   ApiError,
+  createDispatcherPlan,
   createStoreOrder,
   currentUser,
+  getDispatcherPlan,
   getAccessToken,
   getOrderEligibility,
+  listDispatcherOrders,
+  listDispatcherPlans,
   listStoreOrders,
+  publishDispatcherPlan,
   signIn,
   signOut,
+  type DispatcherFilters,
+  type DispatcherOrder,
+  type DispatcherPlan,
   type OrderEligibility,
   type StoreOrder,
   type TemperatureRequirement,
@@ -168,6 +176,205 @@ function StoreOrders() {
   )
 }
 
+function DispatcherWorkspace() {
+  const [filters, setFilters] = useState<DispatcherFilters>({})
+  const [orders, setOrders] = useState<DispatcherOrder[]>([])
+  const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [savedPlans, setSavedPlans] = useState<DispatcherPlan[]>([])
+  const [plan, setPlan] = useState<DispatcherPlan | null>(null)
+  const [reason, setReason] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    listDispatcherOrders(filters)
+      .then((items) => {
+        if (!active) return
+        setOrders(items)
+        if (!filters.planning_date && availableDates.length === 0) {
+          setAvailableDates([...new Set(items.map((order) => order.requested_delivery_date))].sort())
+        }
+        if (!filters.planning_date && items.length > 0) {
+          setFilters((current) => current.planning_date ? current : { ...current, planning_date: items[0].requested_delivery_date })
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(cause instanceof ApiError ? cause.message : 'Could not load the dispatcher order queue.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [filters, availableDates.length])
+
+  useEffect(() => {
+    let active = true
+    listDispatcherPlans(filters.planning_date)
+      .then((items) => { if (active) setSavedPlans(items) })
+      .catch((cause: unknown) => {
+        if (active) setError(cause instanceof ApiError ? cause.message : 'Could not load saved plan versions.')
+      })
+    return () => { active = false }
+  }, [filters.planning_date])
+
+  function updateFilter<K extends keyof DispatcherFilters>(key: K, value: DispatcherFilters[K]) {
+    setPlan(null)
+    setError('')
+    setNotice('')
+    setFilters((current) => ({ ...current, [key]: value }))
+  }
+
+  async function makeCandidate() {
+    if (!filters.planning_date) return
+    setWorking(true)
+    setError('')
+    setNotice('')
+    try {
+      const candidate = await createDispatcherPlan(filters.planning_date, crypto.randomUUID())
+      setPlan(candidate)
+      setSavedPlans((current) => [candidate, ...current.filter((item) => item.id !== candidate.id)])
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not generate a plan candidate.')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function publishPlan() {
+    if (!plan) return
+    setWorking(true)
+    setError('')
+    try {
+      await publishDispatcherPlan(plan.id, crypto.randomUUID(), reason)
+      const updated = await getDispatcherPlan(plan.id)
+      setPlan(updated)
+      setSavedPlans((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setNotice(`Plan V${plan.version_number} was published. Served and deferred orders are now recorded.`)
+      setOrders(await listDispatcherOrders(filters))
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not publish this plan.')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const dateOptions = [...new Set([
+    ...availableDates,
+    ...savedPlans.map((saved) => saved.planning_date),
+  ])].sort()
+  const filterClass = 'mt-2 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
+  const inputClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
+
+  return (
+    <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="dispatcher-heading">
+      <h2 id="dispatcher-heading" className="text-xl font-bold">Dispatcher plan review</h2>
+      <p className="mt-2 text-sm text-slate-400">Filter confirmed orders, generate a draft candidate, review its trips and deferrals, then publish a version.</p>
+
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="text-sm text-slate-200">Delivery date
+          <select className={filterClass} onChange={(event) => updateFilter('planning_date', event.target.value)} value={filters.planning_date ?? ''}>
+            <option value="">All dates</option>
+            {dateOptions.map((date) => <option key={date} value={date}>{date}</option>)}
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">Depot
+          <select className={filterClass} onChange={(event) => updateFilter('depot', event.target.value)} value={filters.depot ?? ''}>
+            <option value="">All depots</option><option>Peliyagoda</option><option>Kandy</option>
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">Brand
+          <select className={filterClass} onChange={(event) => updateFilter('brand', event.target.value)} value={filters.brand ?? ''}>
+            <option value="">All brands</option><option>Fresh</option><option>Style</option><option>Tech</option>
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">District
+          <input className={filterClass} onChange={(event) => updateFilter('district', event.target.value)} placeholder="Any district" value={filters.district ?? ''} />
+        </label>
+        <label className="text-sm text-slate-200">Temperature
+          <select className={filterClass} onChange={(event) => updateFilter('temperature', event.target.value as DispatcherFilters['temperature'])} value={filters.temperature ?? ''}>
+            <option value="">Any temperature</option><option value="AMBIENT">Ambient</option><option value="CHILLED">Chilled</option><option value="FROZEN">Frozen</option>
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">Access rule
+          <select className={filterClass} onChange={(event) => updateFilter('access', event.target.value)} value={filters.access ?? ''}>
+            <option value="">Any access rule</option><option value="VAN_ONLY">Van only</option><option value="NONE">No restriction</option>
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">Delivery window
+          <select className={filterClass} onChange={(event) => updateFilter('delivery_window', event.target.value as DispatcherFilters['delivery_window'])} value={filters.delivery_window ?? ''}>
+            <option value="">Any window</option><option value="restricted">Has receiving window</option><option value="none">No receiving window</option>
+          </select>
+        </label>
+        <label className="text-sm text-slate-200">Prior deferral
+          <select className={filterClass} onChange={(event) => updateFilter('prior_deferral', event.target.value as DispatcherFilters['prior_deferral'])} value={filters.prior_deferral ?? ''}>
+            <option value="">Any</option><option value="true">Previously deferred</option><option value="false">Not deferred before</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+        <p className="text-sm text-slate-300">{loading ? 'Loading orders…' : `${orders.length} confirmed order${orders.length === 1 ? '' : 's'} in this queue`}</p>
+        <button className="rounded-lg bg-cyan-400 px-4 py-2.5 font-bold text-slate-950 disabled:opacity-50" disabled={working || loading || !filters.planning_date || orders.length === 0} onClick={makeCandidate} type="button">
+          {working && !plan ? 'Building candidate…' : 'Generate candidate plan'}
+        </button>
+      </div>
+
+      {savedPlans.length > 0 && <div className="mt-5">
+        <h3 className="font-semibold">Saved plan versions</h3>
+        <ul className="mt-2 flex flex-wrap gap-2">{savedPlans.map((saved) => <li key={saved.id}>
+          <button className="rounded-lg border border-slate-700 px-3 py-2 text-left text-sm hover:border-cyan-500" onClick={() => { setError(''); getDispatcherPlan(saved.id).then(setPlan).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not open this plan version.')) }} type="button">
+            V{saved.version_number} · {saved.status} · {new Date(saved.created_at).toLocaleString()}
+          </button>
+        </li>)}</ul>
+      </div>}
+
+      {!loading && orders.length === 0 && <p className="mt-4 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">No confirmed orders match these filters.</p>}
+      {orders.length > 0 && <ul className="mt-4 divide-y divide-slate-800 rounded-lg border border-slate-800">
+        {orders.map((order) => <li className="flex flex-wrap justify-between gap-2 p-3 text-sm" key={order.id}>
+          <span><strong>{order.reference}</strong> · {order.outlet_id} · {order.brand} / {order.district}{order.window_open_time && order.window_close_time ? ` · ${order.window_open_time}–${order.window_close_time}` : ''}</span>
+          <span className="text-slate-400">{order.requested_delivery_date} · {order.temperature_requirement.toLowerCase()} · {order.weight_kg} kg / {order.volume_m3} m³</span>
+        </li>)}
+      </ul>}
+
+      {plan && <section className="mt-8 rounded-xl border border-cyan-900 bg-slate-950/60 p-5" aria-labelledby="candidate-heading">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Plan V{plan.version_number} · {plan.status}</p><h3 id="candidate-heading" className="mt-1 text-xl font-bold">Candidate review · {plan.planning_date}</h3></div>
+          <div className="flex gap-4 text-sm"><span>{plan.orders.filter((item) => item.decision === 'served').length} served</span><span>{plan.orders.filter((item) => item.decision === 'deferred').length} deferred</span><span>{plan.trips.length} trips</span></div>
+        </div>
+        {plan.diagnostics.length > 0 && <ul className="mt-4 list-disc pl-5 text-sm text-amber-200">{plan.diagnostics.map((item) => <li key={item}>{item.replace(/_/g, ' ')}</li>)}</ul>}
+        <div className="mt-5 space-y-4">
+          {plan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-4" key={trip.id}>
+            <h4 className="font-semibold">{trip.brand} · {trip.district} · {trip.vehicle_id} · Trip {trip.trip_number}</h4>
+            <p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg ({trip.metrics.weight_utilization_pct}% capacity) · {trip.metrics.volume_m3} m³ ({trip.metrics.volume_utilization_pct}% capacity) · {trip.metrics.distance_km} km · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p>
+            <ol className="mt-3 space-y-2 border-l border-slate-700 pl-4 text-sm">{trip.stops.map((stop) => <li key={stop.order_id}><strong>{stop.sequence_number}. {stop.order_ref}</strong> · {stop.outlet_id} · ETA {stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) : 'not set'} · {stop.planned_service_minutes} min service</li>)}</ol>
+          </article>)}
+        </div>
+        <div className="mt-5 rounded-lg bg-slate-900 p-4">
+          <h4 className="font-semibold">Order decisions</h4>
+          <ul className="mt-2 space-y-2 text-sm">{plan.orders.map((item) => <li key={item.order_id} className="flex flex-wrap justify-between gap-2">
+            <span>{item.order_ref} · {item.outlet_id ?? '—'}</span>
+            <span className={item.decision === 'deferred' ? 'text-amber-200' : 'text-emerald-200'}>{item.decision}{item.vehicle_id ? ` · ${item.vehicle_id} / trip ${item.trip_number}` : ''}{item.reason ? ` · ${item.reason.replace(/_/g, ' ')}` : ''}</span>
+          </li>)}</ul>
+        </div>
+        {plan.status === 'DRAFT' && <div className="mt-5 flex flex-wrap items-end gap-3">
+          <label className="min-w-64 flex-1 text-sm text-slate-200">Publication note (optional)
+            <input className={`${inputClass} mt-2 block w-full`} maxLength={500} onChange={(event) => setReason(event.target.value)} value={reason} />
+          </label>
+          <button className="rounded-lg bg-emerald-400 px-5 py-2.5 font-bold text-slate-950 disabled:opacity-50" disabled={working || plan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishPlan} type="button">{working ? 'Publishing…' : 'Publish plan'}</button>
+        </div>}
+        {plan.status === 'PUBLISHED' && <p className="mt-5 rounded-lg bg-emerald-950 p-3 text-sm text-emerald-200">Published {plan.published_at ? new Date(plan.published_at).toLocaleString() : ''}. The published version is locked.</p>}
+      </section>}
+
+      {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
+      {notice && <p role="status" className="mt-4 text-sm text-emerald-300">{notice}</p>}
+    </section>
+  )
+}
+
 function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [checkingSession, setCheckingSession] = useState(() => Boolean(getAccessToken()))
@@ -256,7 +463,7 @@ function App() {
               <dd className="mt-1 font-semibold">{scope}</dd>
             </div>
           </dl>
-          {user.role === 'STORE' ? <StoreOrders /> : (
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <DispatcherWorkspace /> : (
             <p className="mt-8 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">
               You are signed in. Available workflows will appear here as they are implemented for your role.
             </p>

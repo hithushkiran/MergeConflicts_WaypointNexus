@@ -116,4 +116,4 @@ Use `<jira-key>/<short-kebab-case-description>`, for example `FND-01/initial-mon
 
 FND-02 adds a Docker Compose environment with the web, API, and PostgreSQL services. The API exposes `GET /health` for liveness and `GET /ready` for database readiness.
 
-Database schema migrations and deterministic seed data arrive in FND-03. Authentication and outlet-scoped store order workflows are available through the versioned endpoints documented in [docs/api-contracts.md](docs/api-contracts.md); planning and delivery workflows are not implemented yet.
+Database schema migrations and deterministic seed data arrive in FND-03. Authentication and outlet-scoped store orders are available through the versioned endpoints documented in [docs/api-contracts.md](docs/api-contracts.md). Planning includes eligibility/allocation and dispatcher candidate review and publication for configured scenarios. Loading, delivery, sync, and receipt workflows remain in the subsequent roadmap tasks.

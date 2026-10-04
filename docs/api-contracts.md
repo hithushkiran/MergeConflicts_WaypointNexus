@@ -46,6 +46,14 @@ Authorization dependencies are provided for protected route handlers through `re
 
 The configurable `ORDER_CUTOFF_LOCAL_TIME` defaults to 16:00 in `Asia/Colombo`. Before or at the cutoff, orders may be requested for the current calendar date; after it, the next eligible date is the following calendar date. The official business calendar is not present, so weekends and holidays are not skipped. A date earlier than the next eligible date returns `422 ORDER_DATE_TOO_SOON` with the eligible date and explanation. Stored and returned timestamps use UTC.
 
+## Dispatcher planning and publication
+
+All dispatcher routes require a `DISPATCHER` bearer session. `GET /api/v1/dispatcher/orders` returns confirmed orders with outlet rules and accepts optional exact-match filters: `planning_date`, `depot`, `brand`, `district`, `temperature` (`AMBIENT`, `CHILLED`, `FROZEN`), `access`, `delivery_window` (`restricted` or `none`), and `prior_deferral` (`true` or `false`).
+
+`POST /api/v1/dispatcher/plans` accepts `{ "planning_date": "YYYY-MM-DD" }` and requires an `Idempotency-Key`. It creates and persists a draft plan version from the configured planning scenario. The scenario must exist for that date, its orders must all be confirmed, and it must account for every confirmed order on that date; a mismatch returns `409 SCENARIO_ORDER_COVERAGE_MISMATCH`. Missing or invalid reference inputs return a structured `422` error. The response includes order decisions and deferral reasons, draft trips, ordered stops, ETA, capacity utilization, fuel, and diagnostics. Repeating the same key and date returns the original draft; reusing the key with another date returns `409 IDEMPOTENCY_KEY_REUSED`. `GET /api/v1/dispatcher/plans?planning_date=YYYY-MM-DD` lists saved versions, and `GET /api/v1/dispatcher/plans/{plan_version_id}` reloads a reviewable version from PostgreSQL.
+
+To publish, call `POST /api/v1/dispatcher/plans/{plan_version_id}/publish` with an `Idempotency-Key` and optional `{ "reason": "..." }`. The server revalidates complete one-time order coverage, current order states, and trip delivery windows. On success it changes the plan to `PUBLISHED`, trips to `PLANNED`, served orders to `PLANNED`, and deferred orders to `DEFERRED`, and writes an audit event in the same transaction. Repeating the same key and command returns the saved result; reusing the key for another command returns `409 IDEMPOTENCY_KEY_REUSED`. Publishing an already published version returns `409 PLAN_NOT_DRAFT`; published versions have no edit endpoint.
+
 ## Roles and current workflow states
 
 The API must check authorization on the server for every protected route. Frontend route hiding is only a usability aid. A user cannot select or override their role in a request.

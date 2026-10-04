@@ -474,38 +474,38 @@ Now expose planning to the dispatcher.
 
 ## 9.1 Dispatcher queue
 
-* [ ] Orders awaiting planning.
-* [ ] Filters.
-* [ ] Depot.
-* [ ] Brand.
-* [ ] District.
-* [ ] Temperature.
-* [ ] Access.
-* [ ] Delivery window.
-* [ ] Prior deferral.
+* [x] Orders awaiting planning.
+* [x] Filters.
+* [x] Depot.
+* [x] Brand.
+* [x] District.
+* [x] Temperature.
+* [x] Access.
+* [x] Delivery window.
+* [x] Prior deferral.
 
 ## 9.2 Candidate plan
 
 Display:
 
-* [ ] Served orders.
-* [ ] Deferred orders.
-* [ ] Vehicles.
-* [ ] Trips.
-* [ ] Stops.
-* [ ] Utilization.
-* [ ] ETA.
-* [ ] Fuel.
-* [ ] Warnings.
-* [ ] Deferral reasons.
+* [x] Served orders.
+* [x] Deferred orders.
+* [x] Vehicles.
+* [x] Trips.
+* [x] Stops.
+* [x] Utilization.
+* [x] ETA.
+* [x] Fuel.
+* [x] Warnings.
+* [x] Deferral reasons.
 
 ## 9.3 Publish
 
-* [ ] Validate plan.
-* [ ] Publish plan.
-* [ ] Create version.
-* [ ] Prevent accidental modification of published version.
-* [ ] Audit publication.
+* [x] Validate plan.
+* [x] Publish plan.
+* [x] Create version.
+* [x] Prevent accidental modification of published version.
+* [x] Audit publication.
 
 ### Gate 3 — PLAN PUBLISHED
 
@@ -524,6 +524,8 @@ Publish V1
 ```
 
 No manual database manipulation should be necessary.
+
+**Complete:** the seeded Task 2B scenario generated and published V1 through the dispatcher API against the Compose PostgreSQL database. Seven decisions were recorded (six served, one deferred); a publish retry returned the original result.
 
 ---
 

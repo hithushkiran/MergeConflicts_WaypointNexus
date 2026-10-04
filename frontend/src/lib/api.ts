@@ -57,6 +57,83 @@ export interface CreateStoreOrder {
   notes: string | null
 }
 
+export interface DispatcherOrder {
+  id: string
+  reference: string
+  outlet_id: string
+  brand: string
+  district: string
+  depot_code: string
+  dock_type: string
+  parking_constraint: string
+  window_open_time: string | null
+  window_close_time: string | null
+  requested_delivery_date: string
+  temperature_requirement: TemperatureRequirement
+  units: number
+  weight_kg: number
+  volume_m3: number
+  status: string
+  prior_day_deferral: boolean
+}
+
+export interface DispatcherFilters {
+  planning_date?: string
+  depot?: string
+  brand?: string
+  district?: string
+  temperature?: TemperatureRequirement | ''
+  access?: string
+  delivery_window?: 'restricted' | 'none' | ''
+  prior_deferral?: 'true' | 'false' | ''
+}
+
+export interface PlanStop {
+  sequence_number: number
+  order_id: string
+  order_ref: string
+  outlet_id: string
+  planned_arrival: string | null
+  planned_service_minutes: number | null
+}
+
+export interface PlanTrip {
+  id: string
+  vehicle_id: string
+  trip_number: number
+  brand: string
+  district: string
+  status: string
+  metrics: Record<string, number | boolean>
+  stops: PlanStop[]
+}
+
+export interface PlanDecision {
+  order_id: string
+  order_ref: string
+  decision: string
+  vehicle_id: string | null
+  trip_number: number | null
+  outlet_id?: string
+  district?: string
+  brand?: string
+  reason?: string
+  notes?: string | null
+}
+
+export interface DispatcherPlan {
+  id: string
+  planning_run_id: string
+  planning_date: string
+  version_number: number
+  status: string
+  created_at: string
+  published_at: string | null
+  orders: PlanDecision[]
+  trips: PlanTrip[]
+  diagnostics: string[]
+}
+
 interface ApiErrorBody {
   detail?: {
     code?: string
@@ -133,6 +210,56 @@ export function createStoreOrder(order: CreateStoreOrder, idempotencyKey: string
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(order),
+  })
+}
+
+export async function listDispatcherOrders(filters: DispatcherFilters = {}): Promise<DispatcherOrder[]> {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) query.set(key, value)
+  }
+  const suffix = query.size ? `?${query.toString()}` : ''
+  const result = await request<{ items: DispatcherOrder[]; next_cursor: string | null }>(
+    `/api/v1/dispatcher/orders${suffix}`,
+  )
+  return result.items
+}
+
+export async function createDispatcherPlan(planningDate: string, idempotencyKey: string): Promise<DispatcherPlan> {
+  const result = await request<{ plan: DispatcherPlan }>('/api/v1/dispatcher/plans', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ planning_date: planningDate }),
+  })
+  return result.plan
+}
+
+export async function listDispatcherPlans(planningDate?: string): Promise<DispatcherPlan[]> {
+  const query = planningDate ? `?planning_date=${encodeURIComponent(planningDate)}` : ''
+  const result = await request<{ items: DispatcherPlan[] }>(`/api/v1/dispatcher/plans${query}`)
+  return result.items
+}
+
+export async function getDispatcherPlan(planId: string): Promise<DispatcherPlan> {
+  const result = await request<{ plan: DispatcherPlan }>(`/api/v1/dispatcher/plans/${planId}`)
+  return result.plan
+}
+
+export interface PublishedPlanResult {
+  plan_version_id: string
+  version_number: number
+  status: 'PUBLISHED'
+  published_at: string
+  served_orders: number
+  deferred_orders: number
+  replayed: boolean
+}
+
+export function publishDispatcherPlan(planId: string, idempotencyKey: string, reason: string): Promise<PublishedPlanResult> {
+  return request<PublishedPlanResult>(`/api/v1/dispatcher/plans/${planId}/publish`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ reason: reason.trim() || null }),
   })
 }
 
