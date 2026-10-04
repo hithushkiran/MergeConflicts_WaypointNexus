@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from ortools.sat.python import cp_model
@@ -178,6 +179,7 @@ def allocate_orders(
 def allocate_scenario(
     data: PlanningReferenceData,
     *,
+    forced_assignments: dict[str, tuple[str, int]] | None = None,
     time_limit_seconds: float = 5.0,
 ) -> ScenarioAllocationResult:
     """Allocate a seeded operating-day scenario to up to two coherent trips/vehicle."""
@@ -242,6 +244,13 @@ def allocate_scenario(
         vars_ = [assign[key] for key in candidates[order["order_ref"]]]
         if vars_:
             model.add(sum(vars_) <= 1)
+
+    for order_ref, target in (forced_assignments or {}).items():
+        options = candidates.get(order_ref)
+        if options is None:
+            raise ValueError(f"forced order {order_ref} is not in the planning scenario")
+        matching = [key for key in options if (key[1], key[2]) == target]
+        model.add(sum(assign[key] for key in matching) == 1)
 
     group_active: dict[tuple[str, int, str, str], cp_model.IntVar] = {}
     group_keys = sorted({(vid, trip, order_by_ref[ref]["brand"], order_by_ref[ref]["district"])
@@ -441,6 +450,8 @@ def persist_scenario_allocation(
     db: Session,
     planning_run: PlanningRun,
     result: ScenarioAllocationResult,
+    *,
+    revises_plan_version_id: UUID | None = None,
 ) -> PlanVersion:
     """Persist a validated candidate version, its trips, stops, and deferrals atomically."""
     if result.status not in {"OPTIMAL", "FEASIBLE"}:
@@ -474,6 +485,7 @@ def persist_scenario_allocation(
         version_number=latest_version + 1,
         status="DRAFT",
         input_digest=planning_run.snapshot_hash,
+        revises_plan_version_id=revises_plan_version_id,
     )
     db.add(version)
     db.flush()

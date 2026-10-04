@@ -474,38 +474,38 @@ Now expose planning to the dispatcher.
 
 ## 9.1 Dispatcher queue
 
-* [ ] Orders awaiting planning.
-* [ ] Filters.
-* [ ] Depot.
-* [ ] Brand.
-* [ ] District.
-* [ ] Temperature.
-* [ ] Access.
-* [ ] Delivery window.
-* [ ] Prior deferral.
+* [x] Orders awaiting planning.
+* [x] Filters.
+* [x] Depot.
+* [x] Brand.
+* [x] District.
+* [x] Temperature.
+* [x] Access.
+* [x] Delivery window.
+* [x] Prior deferral.
 
 ## 9.2 Candidate plan
 
 Display:
 
-* [ ] Served orders.
-* [ ] Deferred orders.
-* [ ] Vehicles.
-* [ ] Trips.
-* [ ] Stops.
-* [ ] Utilization.
-* [ ] ETA.
-* [ ] Fuel.
-* [ ] Warnings.
-* [ ] Deferral reasons.
+* [x] Served orders.
+* [x] Deferred orders.
+* [x] Vehicles.
+* [x] Trips.
+* [x] Stops.
+* [x] Utilization.
+* [x] ETA.
+* [x] Fuel.
+* [x] Warnings.
+* [x] Deferral reasons.
 
 ## 9.3 Publish
 
-* [ ] Validate plan.
-* [ ] Publish plan.
-* [ ] Create version.
-* [ ] Prevent accidental modification of published version.
-* [ ] Audit publication.
+* [x] Validate plan.
+* [x] Publish plan.
+* [x] Create version.
+* [x] Prevent accidental modification of published version.
+* [x] Audit publication.
 
 ### Gate 3 — PLAN PUBLISHED
 
@@ -525,6 +525,8 @@ Publish V1
 
 No manual database manipulation should be necessary.
 
+**Complete:** the seeded Task 2B scenario generated and published V1 through the dispatcher API against the Compose PostgreSQL database. Seven decisions were recorded (six served, one deferred); a publish retry returned the original result.
+
 ---
 
 # PHASE 10 — LOADER
@@ -534,18 +536,18 @@ No manual database manipulation should be necessary.
 ## 10.1 Trip list
 
 * [ ] Assigned trips.
-* [ ] Vehicle.
-* [ ] Driver.
-* [ ] Departure.
-* [ ] Plan version.
+* [x] Vehicle.
+* [ ] Driver (deferred to T07; no assignment model yet).
+* [x] Planned departure reference (publication time; schedule time not modeled).
+* [x] Plan version.
 
 ## 10.2 Manifest
 
-* [ ] Stop sequence.
-* [ ] Products.
-* [ ] Quantities.
-* [ ] Load sequence.
-* [ ] Manifest version.
+* [x] Stop sequence.
+* [ ] Products (catalog not modeled; each order is one shipment line).
+* [x] Quantities (existing order unit counts).
+* [x] Load sequence.
+* [x] Manifest version.
 
 ## 10.3 Loading verification
 
@@ -560,10 +562,10 @@ SUBSTITUTE
 
 Record:
 
-* [ ] Quantity.
-* [ ] Notes.
-* [ ] Actor.
-* [ ] Timestamp.
+* [x] Quantity.
+* [x] Notes.
+* [x] Actor.
+* [x] Timestamp.
 
 ---
 
@@ -575,9 +577,9 @@ This is one of the most important recovery workflows for the demo.
 
 ## 11.1 Shortfall
 
-* [ ] Loader reports missing/damaged quantity.
-* [ ] Persist shortfall.
-* [ ] Determine whether it is blocking.
+* [x] Loader reports missing/damaged quantity.
+* [x] Persist shortfall.
+* [x] Treat all missing/damaged units as blocking until product criticality data exists.
 
 ## 11.2 Blocking shortfall
 
@@ -589,9 +591,9 @@ Trip
 DISPATCH_HOLD
 ```
 
-* [ ] Driver cannot depart.
-* [ ] Dispatcher sees exception.
-* [ ] Audit event created.
+* [x] Driver departure endpoint rejects held trips.
+* [x] Dispatcher sees exception.
+* [x] Audit event created.
 
 ### Gate 4 — RECOVERY TRIGGER
 
@@ -623,11 +625,11 @@ Dispatcher must be able to resolve the shortfall.
 
 Support the required resolution path(s):
 
-* [ ] Partial fulfillment.
-* [ ] Substitute.
-* [ ] Reallocation.
-* [ ] Reload found.
-* [ ] Defer.
+* [x] Partial fulfillment.
+* [x] Substitute.
+* [x] Reallocation creates a reviewed replacement plan with the selected vehicle/trip fixed through capacity-checked replanning.
+* [x] Reload found.
+* [x] Defer.
 
 Every resolution must have a reason.
 
@@ -651,12 +653,12 @@ Dispatcher resolution
 Manifest V2
 ```
 
-* [ ] Create V2.
-* [ ] Compare V1 vs V2.
-* [ ] Highlight differences.
-* [ ] Reject stale V1.
-* [ ] Loader acknowledges V2.
-* [ ] Departure readiness updates.
+* [x] Create V2.
+* [x] Compare V1 vs V2.
+* [x] Highlight line and quantity differences in the loader screen.
+* [x] Reject stale V1.
+* [x] Loader acknowledges V2.
+* [x] Departure readiness updates.
 
 ### Gate 5 — RECOVERY COMPLETE
 

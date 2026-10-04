@@ -14,6 +14,7 @@ from app.modules.planning.reference_data import load_planning_reference_data
 DATA_DIR = Path("/app/local-data") if Path("/app/local-data").exists() else Path(__file__).parents[2] / "local-data"
 DEMO_DATA_DIR = Path("/app/demo-data") if Path("/app/demo-data").exists() else Path(__file__).parents[1] / "demo-data"
 DEMO_PLANNING_DATE = date(2026, 3, 16)
+DEMO_FND03_ORDER_DATE = date(2026, 3, 17)
 DEMO_ORDERS = [
     ("DEMO-ORD-FRESH-AMBIENT", "OUT001", "DEMO-OUT001", "AMBIENT", 24, 120.0, 1.2),
     ("DEMO-ORD-FRESH-CHILLED", "OUT001", "DEMO-OUT001", "CHILLED", 12, 80.0, 0.8),
@@ -174,8 +175,13 @@ def seed(demo_only: bool = False) -> None:
             outlet_id = demo_outlet_id if is_demo else official_outlet_id
             if outlet_id not in outlet_ids:
                 continue
-            if not session.scalar(select(Order).where(Order.reference == reference)):
-                session.add(Order(reference=reference, outlet_id=outlet_id, requested_delivery_date=DEMO_PLANNING_DATE, temperature_requirement=temperature, units=units, weight_kg=weight, volume_m3=volume, status="CONFIRMED", notes="Deterministic FND-03 development fixture"))
+            existing_demo_order = session.scalar(select(Order).where(Order.reference == reference))
+            if existing_demo_order is None:
+                session.add(Order(reference=reference, outlet_id=outlet_id, requested_delivery_date=DEMO_FND03_ORDER_DATE if is_demo else DEMO_PLANNING_DATE, temperature_requirement=temperature, units=units, weight_kg=weight, volume_m3=volume, status="CONFIRMED", notes="Deterministic FND-03 development fixture"))
+            elif is_demo and existing_demo_order.notes == "Deterministic FND-03 development fixture":
+                # Keep the store-order smoke fixtures separate from the seven-order
+                # Task 2B scenario so each planning run can account for all orders.
+                existing_demo_order.requested_delivery_date = DEMO_FND03_ORDER_DATE
         if is_demo:
             planning_data = load_planning_reference_data(data_dir, "PEAK-DAY-01")
             for row in planning_data.orders:

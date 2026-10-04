@@ -7,7 +7,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import get_settings
 from app.infrastructure.database import database_is_available
 from app.modules.identity.routes import router as identity_router
+from app.modules.dispatcher.routes import router as dispatcher_router
 from app.modules.orders.routes import router as orders_router
+from app.modules.loading.routes import dispatcher as shortfall_router, driver as departure_router, loader as loading_router
 
 settings = get_settings()
 
@@ -21,6 +23,10 @@ app.add_middleware(
 )
 app.include_router(identity_router)
 app.include_router(orders_router)
+app.include_router(dispatcher_router)
+app.include_router(loading_router)
+app.include_router(shortfall_router)
+app.include_router(departure_router)
 
 
 @app.exception_handler(StarletteHTTPException)

@@ -110,6 +110,7 @@ class PlanVersion(Base):
     status: Mapped[str] = mapped_column(String(32))
     created_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     input_digest: Mapped[str | None] = mapped_column(String(128))
+    revises_plan_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("plan_versions.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("planning_run_id", "version_number"),)
@@ -154,13 +155,26 @@ class Deferral(Base):
 class ManifestCheck(Base):
     __tablename__ = "manifest_checks"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    trip_id: Mapped[UUID] = mapped_column(ForeignKey("trips.id")); order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id")); expected_quantity: Mapped[int] = mapped_column(Integer); loaded_quantity: Mapped[int] = mapped_column(Integer, default=0); status: Mapped[str] = mapped_column(String(32))
+    trip_id: Mapped[UUID] = mapped_column(ForeignKey("trips.id"), index=True); order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id")); expected_quantity: Mapped[int] = mapped_column(Integer); loaded_quantity: Mapped[int] = mapped_column(Integer, default=0); status: Mapped[str] = mapped_column(String(32)); manifest_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("manifest_versions.id"), index=True); load_sequence: Mapped[int] = mapped_column(Integer, default=0); notes: Mapped[str | None] = mapped_column(Text); checked_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id")); checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ManifestVersion(Base):
+    __tablename__ = "manifest_versions"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    trip_id: Mapped[UUID] = mapped_column(ForeignKey("trips.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="CURRENT")
+    created_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("trip_id", "version_number"),)
 
 
 class Shortfall(Base):
     __tablename__ = "shortfalls"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    trip_id: Mapped[UUID | None] = mapped_column(ForeignKey("trips.id"), index=True); order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id")); reason: Mapped[str] = mapped_column(String(80)); quantity: Mapped[int] = mapped_column(Integer); blocking: Mapped[bool] = mapped_column(Boolean); status: Mapped[str] = mapped_column(String(32), index=True); resolution: Mapped[str | None] = mapped_column(Text)
+    trip_id: Mapped[UUID | None] = mapped_column(ForeignKey("trips.id"), index=True); order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id")); reason: Mapped[str] = mapped_column(String(80)); quantity: Mapped[int] = mapped_column(Integer); blocking: Mapped[bool] = mapped_column(Boolean); status: Mapped[str] = mapped_column(String(32), index=True); resolution: Mapped[str | None] = mapped_column(Text); manifest_check_id: Mapped[UUID | None] = mapped_column(ForeignKey("manifest_checks.id")); created_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id")); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now()); resolution_plan_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("plan_versions.id"))
 
 
 class DeliveryEvent(Base):
