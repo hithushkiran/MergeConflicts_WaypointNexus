@@ -1,0 +1,5 @@
+scenario,vehicle_id,status
+PEAK-DAY-01,DEMO-VEH001,available
+PEAK-DAY-01,DEMO-VEH002,available
+PEAK-DAY-01,DEMO-VEH003,available
+PEAK-DAY-01,DEMO-VEH004,workshop

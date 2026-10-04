@@ -126,7 +126,10 @@ class Trip(Base):
     status: Mapped[str] = mapped_column(String(32))
     metrics: Mapped[dict | None] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
-    __table_args__ = (UniqueConstraint("plan_version_id", "trip_number"),)
+    __table_args__ = (UniqueConstraint(
+        "plan_version_id", "vehicle_id", "trip_number",
+        name="uq_trips_plan_version_vehicle_trip",
+    ),)
 
 
 class TripStop(Base):

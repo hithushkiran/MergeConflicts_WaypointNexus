@@ -1,5 +1,10 @@
-# Synthetic development data
+# Synthetic planning fixture
 
-These small CSV files contain invented, clearly marked demo records for local development only. They are not official competition data and must not be used for competition results, operational decisions, or submissions.
+These CSVs are deterministic, synthetic local development data. They exercise
+the Task 2B peak-day feasibility rules and are not competition-source records.
+Keep these fixtures in the demo dataset; keep any supplied competition datasets
+in the ignored `local-data/` directory.
 
-When `APP_ENV=development` and the Git-ignored `local-data/` official CSV pair is absent, the Compose API uses this dataset to provide a working demo login and store order workflow. If either official CSV is present without the other, seeding fails rather than silently mixing datasets.
+The planning references are `task2b_peak_day_scenarios.csv`,
+`task2b_peak_day_fleet.csv`, `calendar.csv`, `district_travel.csv`, and
+`service_allowance.csv`. `vehicles.csv` is shared with the regular demo seed.

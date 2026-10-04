@@ -1,0 +1,8 @@
+scenario,order_ref,outlet_id,requested_delivery_date,depot,brand,district,temp_requirement,parking_constraint,order_weight_kg,order_volume_m3,units,dock_type,window_open_time,window_close_time,prior_day_deferral
+PEAK-DAY-01,PEAK-ORD-001,DEMO-OUT031,2026-03-16,Peliyagoda,Fresh,Colombo,chilled,van_only,180,1.8,30,STANDARD,05:30,08:00,0
+PEAK-DAY-01,PEAK-ORD-002,DEMO-OUT032,2026-03-16,Peliyagoda,Fresh,Colombo,ambient,none,300,2.5,50,STANDARD,04:30,08:00,1
+PEAK-DAY-01,PEAK-ORD-003,DEMO-OUT015,2026-03-16,Kandy,Style,Kandy,ambient,none,680,7.0,68,MALL,10:00,18:00,0
+PEAK-DAY-01,PEAK-ORD-004,DEMO-OUT015,2026-03-16,Kandy,Style,Kandy,ambient,none,720,7.5,72,MALL,10:00,18:00,0
+PEAK-DAY-01,PEAK-ORD-005,DEMO-OUT021,2026-03-16,Peliyagoda,Tech,Gampaha,ambient,none,1850,8.0,18,STANDARD,,,0
+PEAK-DAY-01,PEAK-ORD-006,DEMO-OUT021,2026-03-16,Peliyagoda,Tech,Gampaha,ambient,none,900,5.0,9,STANDARD,,,0
+PEAK-DAY-01,PEAK-ORD-007,DEMO-OUT021,2026-03-16,Peliyagoda,Tech,Gampaha,ambient,none,700,4.0,7,STANDARD,,,0

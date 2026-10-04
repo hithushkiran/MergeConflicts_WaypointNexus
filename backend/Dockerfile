@@ -11,7 +11,7 @@ COPY demo-data ./demo-data
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout 300 --retries 10 .
 
 EXPOSE 8000
 

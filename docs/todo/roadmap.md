@@ -333,19 +333,21 @@ Now implement the most technically important backend component.
 
 Collect:
 
-* [ ] Orders
-* [ ] Vehicles
-* [ ] Depots
-* [ ] Capacity
-* [ ] Weight
-* [ ] Volume
-* [ ] Temperature requirements
-* [ ] Access restrictions
-* [ ] Delivery windows
-* [ ] Fuel constraints
-* [ ] Travel/service information
+* [x] Orders
+* [x] Vehicles
+* [x] Depots
+* [x] Capacity
+* [x] Weight
+* [x] Volume
+* [x] Temperature requirements
+* [x] Access restrictions (captured; compatibility rules remain explicitly unavailable)
+* [x] Delivery windows
+* [x] Fuel constraints
+* [x] Travel/service information from planning reference files; missing mappings are diagnosed and made ineligible.
+* [x] Operating calendar and vehicle availability, including workshop status.
+* [x] Previously consumed weekly fuel and weekly quota.
 
-Create a deterministic snapshot.
+* [x] Create and persist a deterministic, versioned snapshot.
 
 ---
 
@@ -357,15 +359,15 @@ Implement hard constraints independently from the optimizer.
 
 Check:
 
-* [ ] Depot compatibility.
-* [ ] Vehicle availability.
-* [ ] Weight capacity.
-* [ ] Volume capacity.
-* [ ] Temperature compatibility.
-* [ ] Access restrictions.
-* [ ] Delivery window.
-* [ ] Fuel.
-* [ ] Trip constraints.
+* [x] Depot compatibility.
+* [x] Vehicle availability (explicit per-date fleet schedule and workshop status).
+* [x] Weight capacity.
+* [x] Volume capacity.
+* [x] Temperature compatibility.
+* [x] Access restrictions (Task 2B's `van_only` rule is enforced; unsupported constraints can be supplied as explicit evidence).
+* [x] Delivery window (requires a verified arrival estimate).
+* [x] Fuel (includes weekly fuel already consumed, per handout BR-08).
+* [x] Trip constraints (maximum two trips per operating day; one depot, brand, and district per trip; operating-day calendar gate).
 
 Every rejection must have a reason.
 
@@ -394,9 +396,9 @@ Examples:
 * [ ] Too much weight.
 * [ ] Too much volume.
 * [ ] Wrong temperature vehicle.
-* [ ] Vehicle unavailable.
-* [ ] Delivery window impossible.
-* [ ] Fuel impossible.
+* [x] Vehicle unavailable.
+* [x] Delivery window impossible.
+* [x] Fuel impossible.
 
 **Do not build the UI around the planner until these tests work.**
 
@@ -410,35 +412,35 @@ Implement the OR-Tools allocation component.
 
 ## 8.1 Vehicle assignment
 
-* [ ] Assign orders to eligible vehicles.
-* [ ] Respect capacity.
-* [ ] Respect temperature.
-* [ ] Respect access.
-* [ ] Respect delivery windows.
+* [x] Assign orders to eligible vehicles.
+* [x] Respect capacity.
+* [x] Respect temperature.
+* [x] Respect access (`van_only` requires a van, per Task 2B).
+* [x] Respect delivery windows when estimates are supplied.
 
 ## 8.2 Trip construction
 
-* [ ] Create trips.
-* [ ] Create stops.
-* [ ] Create stop sequence.
-* [ ] Calculate utilization.
-* [ ] Calculate ETA.
-* [ ] Track fuel-related constraints.
+* [x] Create and persist trips/stops from allocations.
+* [x] Create stop sequence.
+* [x] Calculate utilization.
+* [x] Calculate ETA.
+* [x] Track projected weekly fuel including previously consumed liters.
+* [x] Enforce two-trip operating-day limit and Fresh/daytime operating windows.
 
 ## 8.3 Deferral
 
 If not all orders can be served:
 
-* [ ] Mark deferred.
-* [ ] Generate reason.
-* [ ] Preserve deterministic output.
+* [x] Mark deferred.
+* [x] Generate reason.
+* [x] Preserve deterministic output.
 
 ## 8.4 Timeout/no solution
 
-* [ ] Detect optimizer timeout.
-* [ ] Return best feasible result where available.
-* [ ] Return diagnostics.
-* [ ] Never silently relax hard constraints.
+* [x] Detect optimizer timeout.
+* [x] Return best feasible result where available.
+* [x] Return diagnostics.
+* [x] Never silently relax hard constraints.
 
 ### Gate 2 — PLANNING
 

@@ -9,9 +9,10 @@ from app.core.config import Settings, get_settings
 from app.infrastructure.database import get_session_factory
 from app.infrastructure.persistence import Depot, Order, Outlet, PlanningRun, Role, User, Vehicle
 from app.modules.identity.security import hash_password
+from app.modules.planning.reference_data import load_planning_reference_data
 
 DATA_DIR = Path("/app/local-data") if Path("/app/local-data").exists() else Path(__file__).parents[2] / "local-data"
-DEMO_DATA_DIR = Path("/app/demo-data") if Path("/app/demo-data").exists() else Path(__file__).parents[2] / "demo-data"
+DEMO_DATA_DIR = Path("/app/demo-data") if Path("/app/demo-data").exists() else Path(__file__).parents[1] / "demo-data"
 DEMO_PLANNING_DATE = date(2026, 3, 16)
 DEMO_ORDERS = [
     ("DEMO-ORD-FRESH-AMBIENT", "OUT001", "DEMO-OUT001", "AMBIENT", 24, 120.0, 1.2),
@@ -120,8 +121,8 @@ def seed(demo_only: bool = False) -> None:
     if is_demo:
         if {"DEMO-OUT001", "DEMO-OUT015", "DEMO-OUT021"} - {row["outlet_id"] for row in outlets}:
             raise RuntimeError("Synthetic demo outlet fixtures are incomplete")
-        if len(vehicles) != 2:
-            raise RuntimeError("Synthetic demo vehicle fixture count mismatch (expected 2)")
+        if len(vehicles) != 4:
+            raise RuntimeError("Synthetic demo vehicle fixture count mismatch (expected 4)")
         print("Seeding clearly labeled synthetic development data.")
     elif len(outlets) != 120 or len(vehicles) != 60:
         raise RuntimeError("Official dataset count mismatch (expected 120 outlets and 60 vehicles)")
@@ -133,9 +134,35 @@ def seed(demo_only: bool = False) -> None:
             if not session.get(Depot, code): session.add(Depot(code=code, name=name))
         session.flush()
         for row in outlets:
-            if not session.get(Outlet, row["outlet_id"]): session.add(Outlet(outlet_id=row["outlet_id"], brand=row["brand"].upper(), district=row["district"], depot_code=row["depot"], dock_type=row["dock_type"], parking_constraint=row["parking_constraint"], mall_window=row["mall_window"] or None, window_open_time=row["window_open_time"] or None, window_close_time=row["window_close_time"] or None))
+            values = {
+                "brand": row["brand"].upper(), "district": row["district"],
+                "depot_code": row["depot"], "dock_type": row["dock_type"].upper(),
+                "parking_constraint": row["parking_constraint"].upper(),
+                "mall_window": row["mall_window"] or None,
+                "window_open_time": row["window_open_time"] or None,
+                "window_close_time": row["window_close_time"] or None,
+            }
+            outlet = session.get(Outlet, row["outlet_id"])
+            if outlet is None:
+                session.add(Outlet(outlet_id=row["outlet_id"], **values))
+            elif is_demo:
+                for key, value in values.items():
+                    setattr(outlet, key, value)
         for row in vehicles:
-            if not session.get(Vehicle, row["vehicle_id"]): session.add(Vehicle(vehicle_id=row["vehicle_id"], type=row["type"].upper(), temp=row["temp"].upper(), weight_cap_kg=float(row["weight_cap_kg"]), volume_cap_m3=float(row["volume_cap_m3"]), fuel_type=row["fuel_type"], km_per_l=float(row["km_per_l"]), weekly_fuel_quota_l=float(row["weekly_fuel_quota_l"]), depot_code=row["depot"]))
+            values = {
+                "type": row["type"].upper(), "temp": row["temp"].upper(),
+                "weight_cap_kg": float(row["weight_cap_kg"]),
+                "volume_cap_m3": float(row["volume_cap_m3"]),
+                "fuel_type": row["fuel_type"], "km_per_l": float(row["km_per_l"]),
+                "weekly_fuel_quota_l": float(row["weekly_fuel_quota_l"]),
+                "depot_code": row["depot"],
+            }
+            vehicle = session.get(Vehicle, row["vehicle_id"])
+            if vehicle is None:
+                session.add(Vehicle(vehicle_id=row["vehicle_id"], **values))
+            elif is_demo:
+                for key, value in values.items():
+                    setattr(vehicle, key, value)
         session.flush()
         roles = {role.code: role.id for role in session.scalars(select(Role)).all()}
         settings: Settings = get_settings()
@@ -149,6 +176,19 @@ def seed(demo_only: bool = False) -> None:
                 continue
             if not session.scalar(select(Order).where(Order.reference == reference)):
                 session.add(Order(reference=reference, outlet_id=outlet_id, requested_delivery_date=DEMO_PLANNING_DATE, temperature_requirement=temperature, units=units, weight_kg=weight, volume_m3=volume, status="CONFIRMED", notes="Deterministic FND-03 development fixture"))
+        if is_demo:
+            planning_data = load_planning_reference_data(data_dir, "PEAK-DAY-01")
+            for row in planning_data.orders:
+                if row["outlet_id"] not in outlet_ids:
+                    raise RuntimeError(f"Planning fixture refers to unknown outlet {row['outlet_id']}")
+                if not session.scalar(select(Order).where(Order.reference == row["order_ref"])):
+                    session.add(Order(
+                        reference=row["order_ref"], outlet_id=row["outlet_id"],
+                        requested_delivery_date=planning_data.planning_date,
+                        temperature_requirement=row["temp_requirement"].upper(),
+                        units=row["units"], weight_kg=row["weight_kg"], volume_m3=row["volume_m3"],
+                        status="CONFIRMED", notes="Synthetic Task 2B peak-day planning fixture",
+                    ))
         if not session.scalar(select(PlanningRun).where(PlanningRun.planning_date == DEMO_PLANNING_DATE, PlanningRun.snapshot_hash == "demo-2026-03-16")):
             session.add(PlanningRun(planning_date=DEMO_PLANNING_DATE, snapshot_hash="demo-2026-03-16", status="DRAFT", runtime_metadata={"fixture": "FND-03"}))
         session.commit()
