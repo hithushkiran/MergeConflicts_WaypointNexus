@@ -1,8 +1,8 @@
 """Driver trip workflow and proof of delivery."""
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Body, Depends, Header, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +22,22 @@ class StopCompletion(BaseModel):
     outcome: str = Field(pattern="^(DELIVERED|FAILED)$")
     receiver_name: str | None = Field(default=None, max_length=120)
     notes: str | None = Field(default=None, max_length=1000)
+    occurred_at: datetime | None = None
+
+
+class CommandTiming(BaseModel):
+    occurred_at: datetime
+
+
+def _event_time(provided: datetime | None, now: datetime) -> datetime:
+    if provided is None:
+        return now
+    if provided.tzinfo is None or provided.utcoffset() is None:
+        raise api_error(422, "TIMEZONE_REQUIRED", "The event timestamp must include its timezone.")
+    occurred = provided.astimezone(UTC)
+    if occurred > now + timedelta(minutes=5):
+        raise api_error(422, "INVALID_EVENT_TIME", "The event timestamp cannot be in the future.")
+    return occurred
 
 
 def _trip_for_driver(db: Session, trip_id: UUID, principal: Principal) -> Trip:
@@ -50,12 +66,24 @@ def _trip_read(db: Session, trip: Trip) -> dict:
     manifest = _manifest_ready(db, trip)
     rows = db.execute(select(TripStop, Order, Outlet).join(Order, Order.id == TripStop.order_id).join(Outlet, Outlet.outlet_id == Order.outlet_id).where(TripStop.trip_id == trip.id).order_by(TripStop.sequence_number)).all()
     manifest_order_ids = set(db.scalars(select(ManifestCheck.order_id).where(ManifestCheck.manifest_version_id == manifest.id)).all()) if manifest else set()
+    manifest_lines = db.execute(
+        select(ManifestCheck, Order, TripStop)
+        .join(Order, Order.id == ManifestCheck.order_id)
+        .join(TripStop, (TripStop.trip_id == ManifestCheck.trip_id) & (TripStop.order_id == ManifestCheck.order_id))
+        .where(ManifestCheck.manifest_version_id == manifest.id)
+        .order_by(ManifestCheck.load_sequence)
+    ).all() if manifest else []
     return {
         "id": str(trip.id), "vehicle_id": trip.vehicle_id, "vehicle_type": vehicle.type if vehicle else None,
         "depot_code": vehicle.depot_code if vehicle else None, "driver_name": driver.display_name if driver else None,
         "trip_number": trip.trip_number, "brand": trip.brand, "district": trip.district, "status": trip.status,
         "plan_version": plan.version_number if plan else None,
         "manifest_version": manifest.version_number if manifest else None,
+        "manifest": {"version_number": manifest.version_number, "lines": [{
+            "order_id": str(check.order_id), "order_ref": order.reference, "outlet_id": order.outlet_id,
+            "sequence_number": stop.sequence_number, "expected_quantity": check.expected_quantity,
+            "loaded_quantity": check.loaded_quantity, "status": check.status, "notes": check.notes,
+        } for check, order, stop in manifest_lines]} if manifest else None,
         "stops": [{"id": str(stop.id), "sequence_number": stop.sequence_number, "order_id": str(order.id),
                    "order_ref": order.reference, "outlet_id": outlet.outlet_id, "brand": outlet.brand,
                    "district": outlet.district, "window_open_time": outlet.window_open_time,
@@ -81,23 +109,27 @@ def get_my_trip(trip_id: UUID, principal: Principal = Depends(require_roles("DRI
     return _trip_read(db, trip)
 
 
-def _idempotent_replay(db: Session, key: str, command: str, aggregate: str, payload: dict, now: datetime, actor: UUID) -> dict | None:
+def _idempotent_replay(db: Session, key: str, command: str, aggregate: str, payload: dict, actor: UUID, command_id: str | None = None) -> dict | None:
+    request_metadata = {"payload": payload, "actor_id": str(actor), "command_id": command_id}
     record = db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key == key))
     if record is None:
         db.add(IdempotencyRecord(key=key, command_type=command, aggregate_id=aggregate,
-                                 request_metadata={"payload": payload, "actor_id": str(actor)},
-                                 result_metadata={"accepted": True}, status="COMPLETED"))
+                                 request_metadata=request_metadata,
+                                 result_metadata={"accepted": True, "command_id": command_id}, status="COMPLETED"))
         db.flush()
         return None
-    if record.command_type != command or record.aggregate_id != aggregate or record.request_metadata != {"payload": payload, "actor_id": str(actor)}:
+    if record.command_type != command or record.aggregate_id != aggregate or record.request_metadata != request_metadata:
         raise api_error(409, "IDEMPOTENCY_CONFLICT", "This command key was already used for a different request.")
-    return {"replayed": True}
+    return {"replayed": True, "command_id": (record.request_metadata or {}).get("command_id")}
 
 
 @router.post("/trips/{trip_id}/depart")
-def depart_trip(trip_id: UUID, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
+def depart_trip(trip_id: UUID, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), command_id: str | None = Header(default=None, max_length=128, alias="X-Command-Id"), payload: CommandTiming | None = Body(default=None), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
     trip = _trip_for_driver(db, trip_id, principal)
-    replay = _idempotent_replay(db, idempotency_key, "TRIP_DEPART", str(trip.id), {}, datetime.now(UTC), principal.user.id)
+    now = datetime.now(UTC)
+    occurred_at = _event_time(payload.occurred_at if payload else None, now)
+    command_payload = {"occurred_at": payload.occurred_at.isoformat()} if payload else {}
+    replay = _idempotent_replay(db, idempotency_key, "TRIP_DEPART", str(trip.id), command_payload, principal.user.id, command_id)
     if replay:
         db.rollback()
         return {"trip_id": str(trip.id), "status": trip.status, **replay}
@@ -107,11 +139,10 @@ def depart_trip(trip_id: UUID, idempotency_key: str = Header(min_length=1, max_l
     if trip.status != "READY" or _manifest_ready(db, trip) is None:
         db.rollback()
         raise api_error(409, "TRIP_NOT_READY", "The trip needs a current acknowledged manifest before departure.")
-    now = datetime.now(UTC)
-    trip.status, trip.started_at = "IN_PROGRESS", now
-    db.add(AuditEvent(aggregate_type="TRIP", aggregate_id=str(trip.id), action="DEPARTED", actor_id=principal.user.id, new_state={"status": trip.status, "started_at": now.isoformat()}, correlation_id=idempotency_key))
+    trip.status, trip.started_at = "IN_PROGRESS", occurred_at
+    db.add(AuditEvent(aggregate_type="TRIP", aggregate_id=str(trip.id), action="DEPARTED", actor_id=principal.user.id, new_state={"status": trip.status, "started_at": occurred_at.isoformat()}, correlation_id=idempotency_key))
     db.commit()
-    return {"trip_id": str(trip.id), "status": trip.status}
+    return {"trip_id": str(trip.id), "status": trip.status, "command_id": command_id}
 
 
 def _owned_stop(db: Session, stop_id: UUID, principal: Principal) -> tuple[TripStop, Trip, Order]:
@@ -123,9 +154,12 @@ def _owned_stop(db: Session, stop_id: UUID, principal: Principal) -> tuple[TripS
 
 
 @router.post("/stops/{stop_id}/arrive")
-def arrive(stop_id: UUID, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
+def arrive(stop_id: UUID, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), command_id: str | None = Header(default=None, max_length=128, alias="X-Command-Id"), payload: CommandTiming | None = Body(default=None), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
     stop, trip, _ = _owned_stop(db, stop_id, principal)
-    replay = _idempotent_replay(db, idempotency_key, "STOP_ARRIVE", str(stop.id), {}, datetime.now(UTC), principal.user.id)
+    now = datetime.now(UTC)
+    occurred_at = _event_time(payload.occurred_at if payload else None, now)
+    command_payload = {"occurred_at": payload.occurred_at.isoformat()} if payload else {}
+    replay = _idempotent_replay(db, idempotency_key, "STOP_ARRIVE", str(stop.id), command_payload, principal.user.id, command_id)
     if replay:
         db.rollback()
         return {"stop_id": str(stop.id), "status": stop.status, **replay}
@@ -136,19 +170,20 @@ def arrive(stop_id: UUID, idempotency_key: str = Header(min_length=1, max_length
     if prior:
         db.rollback()
         raise api_error(409, "STOP_ORDER_REQUIRED", "Complete the previous stop before arriving here.")
-    now = datetime.now(UTC)
-    stop.status, stop.arrived_at = "ARRIVED", now
-    db.add(DeliveryEvent(trip_stop_id=stop.id, event_type="ARRIVED", occurred_at=now, command_ref=idempotency_key, actor_id=principal.user.id))
-    db.add(AuditEvent(aggregate_type="TRIP_STOP", aggregate_id=str(stop.id), action="ARRIVED", actor_id=principal.user.id, new_state={"status": stop.status, "arrived_at": now.isoformat()}, correlation_id=idempotency_key))
+    stop.status, stop.arrived_at = "ARRIVED", occurred_at
+    db.add(DeliveryEvent(trip_stop_id=stop.id, event_type="ARRIVED", occurred_at=occurred_at, command_ref=idempotency_key, actor_id=principal.user.id))
+    db.add(AuditEvent(aggregate_type="TRIP_STOP", aggregate_id=str(stop.id), action="ARRIVED", actor_id=principal.user.id, new_state={"status": stop.status, "arrived_at": occurred_at.isoformat()}, correlation_id=idempotency_key))
     db.commit()
-    return {"stop_id": str(stop.id), "status": stop.status, "arrived_at": now.isoformat()}
+    return {"stop_id": str(stop.id), "status": stop.status, "arrived_at": occurred_at.isoformat(), "command_id": command_id}
 
 
 @router.post("/stops/{stop_id}/complete")
-def complete_stop(stop_id: UUID, payload: StopCompletion, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
+def complete_stop(stop_id: UUID, payload: StopCompletion, idempotency_key: str = Header(min_length=1, max_length=128, alias="Idempotency-Key"), command_id: str | None = Header(default=None, max_length=128, alias="X-Command-Id"), principal: Principal = Depends(require_roles("DRIVER")), db: Session = Depends(get_db_session)) -> dict:
     stop, trip, order = _owned_stop(db, stop_id, principal)
     body = payload.model_dump()
-    replay = _idempotent_replay(db, idempotency_key, "STOP_COMPLETE", str(stop.id), body, datetime.now(UTC), principal.user.id)
+    if payload.occurred_at is not None:
+        body["occurred_at"] = payload.occurred_at.isoformat()
+    replay = _idempotent_replay(db, idempotency_key, "STOP_COMPLETE", str(stop.id), body, principal.user.id, command_id)
     if replay:
         db.rollback()
         return {"stop_id": str(stop.id), "status": stop.status, **replay}
@@ -162,18 +197,19 @@ def complete_stop(stop_id: UUID, payload: StopCompletion, idempotency_key: str =
         db.rollback()
         raise api_error(422, "FAILURE_REASON_REQUIRED", "Enter a reason for the failed delivery.")
     now = datetime.now(UTC)
-    stop.status, stop.completed_at = payload.outcome, now
+    occurred_at = _event_time(payload.occurred_at, now)
+    stop.status, stop.completed_at = payload.outcome, occurred_at
     order.status = "DELIVERED" if payload.outcome == "DELIVERED" else "DELIVERY_FAILED"
-    event = DeliveryEvent(trip_stop_id=stop.id, event_type=payload.outcome, occurred_at=now, command_ref=idempotency_key, actor_id=principal.user.id,
+    event = DeliveryEvent(trip_stop_id=stop.id, event_type=payload.outcome, occurred_at=occurred_at, command_ref=idempotency_key, actor_id=principal.user.id,
                           metadata_={"receiver_name": payload.receiver_name, "notes": payload.notes})
     db.add(event)
     db.flush()
     db.add(ProofOfDelivery(trip_stop_id=stop.id, delivery_event_id=event.id, receiver_name=payload.receiver_name,
-                           outcome=payload.outcome, notes=payload.notes))
-    db.add(AuditEvent(aggregate_type="TRIP_STOP", aggregate_id=str(stop.id), action=payload.outcome, actor_id=principal.user.id, old_state={"status": "ARRIVED"}, new_state={"status": stop.status, "order_status": order.status}, reason=payload.notes, correlation_id=idempotency_key))
+                           outcome=payload.outcome, notes=payload.notes, created_at=occurred_at))
+    db.add(AuditEvent(aggregate_type="TRIP_STOP", aggregate_id=str(stop.id), action=payload.outcome, actor_id=principal.user.id, old_state={"status": "ARRIVED"}, new_state={"status": stop.status, "order_status": order.status, "completed_at": occurred_at.isoformat()}, reason=payload.notes, correlation_id=idempotency_key))
     outstanding = db.scalar(select(TripStop.id).where(TripStop.trip_id == trip.id, TripStop.status.not_in(["DELIVERED", "FAILED"])).limit(1))
     if outstanding is None:
-        trip.status, trip.completed_at = "COMPLETED", now
-        db.add(AuditEvent(aggregate_type="TRIP", aggregate_id=str(trip.id), action="COMPLETED", actor_id=principal.user.id, new_state={"status": "COMPLETED", "completed_at": now.isoformat()}))
+        trip.status, trip.completed_at = "COMPLETED", occurred_at
+        db.add(AuditEvent(aggregate_type="TRIP", aggregate_id=str(trip.id), action="COMPLETED", actor_id=principal.user.id, new_state={"status": "COMPLETED", "completed_at": occurred_at.isoformat()}))
     db.commit()
-    return {"stop_id": str(stop.id), "status": stop.status, "trip_status": trip.status, "proof_recorded": True}
+    return {"stop_id": str(stop.id), "status": stop.status, "trip_status": trip.status, "proof_recorded": True, "command_id": command_id}

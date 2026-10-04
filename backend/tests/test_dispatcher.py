@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.database import get_db_session
-from app.infrastructure.persistence import AuditEvent, Base, Deferral, DeliveryEvent, Depot, ManifestVersion, Order, Outlet, PlanVersion, ProofOfDelivery, Role, Shortfall, Trip, User, Vehicle
+from app.infrastructure.persistence import AuditEvent, Base, Deferral, DeliveryEvent, Depot, IdempotencyRecord, ManifestVersion, Order, Outlet, PlanVersion, ProofOfDelivery, Role, Shortfall, Trip, User, Vehicle
 from app.main import app
 from app.modules.identity.security import hash_password
 from app.modules.planning.reference_data import load_planning_reference_data
@@ -253,11 +253,21 @@ def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatc
     for index, stop in enumerate(stops):
         arrived = client.post(f"/api/v1/driver/stops/{stop['id']}/arrive", headers={**driver, "Idempotency-Key": f"arrive-{index}"})
         assert arrived.status_code == 200, arrived.text
-        completed = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers={**driver, "Idempotency-Key": f"complete-{index}"}, json={"outcome": "DELIVERED", "receiver_name": "Receiving team", "notes": "Left at receiving bay"})
+        command_headers = {**driver, "Idempotency-Key": f"complete-{index}", "X-Command-Id": f"offline-command-{index}"}
+        completion_payload = {"outcome": "DELIVERED", "receiver_name": "Receiving team", "notes": "Left at receiving bay", "occurred_at": "2026-03-16T12:40:00Z"}
+        completed = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers=command_headers, json=completion_payload)
         assert completed.status_code == 200, completed.text
+        if index == 0:
+            replay = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers=command_headers, json=completion_payload)
+            assert replay.status_code == 200 and replay.json()["replayed"] is True
+            assert replay.json()["command_id"] == "offline-command-0"
     with factory() as session:
         assert session.get(Trip, UUID(trip["id"])).status == "COMPLETED"
-        assert session.scalar(select(ProofOfDelivery).where(ProofOfDelivery.outcome == "DELIVERED")) is not None
+        assert len(session.scalars(select(ProofOfDelivery).where(ProofOfDelivery.outcome == "DELIVERED")).all()) == len(stops)
+        idempotency = session.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key == "complete-0"))
+        assert idempotency.request_metadata["command_id"] == "offline-command-0"
+        proof = session.scalar(select(ProofOfDelivery).where(ProofOfDelivery.outcome == "DELIVERED"))
+        assert proof.created_at.isoformat().startswith("2026-03-16T12:40:00")
         assert session.scalar(select(DeliveryEvent).where(DeliveryEvent.event_type == "ARRIVED")) is not None
 
 
