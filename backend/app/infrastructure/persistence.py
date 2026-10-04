@@ -126,6 +126,9 @@ class Trip(Base):
     district: Mapped[str] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(32))
     metrics: Mapped[dict | None] = mapped_column(JSON)
+    assigned_driver_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
     __table_args__ = (UniqueConstraint(
         "plan_version_id", "vehicle_id", "trip_number",
@@ -141,6 +144,9 @@ class TripStop(Base):
     sequence_number: Mapped[int] = mapped_column(Integer)
     planned_arrival: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     planned_service_minutes: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("trip_id", "sequence_number"), UniqueConstraint("trip_id", "order_id"))
 
 
@@ -180,7 +186,7 @@ class Shortfall(Base):
 class DeliveryEvent(Base):
     __tablename__ = "delivery_events"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    trip_stop_id: Mapped[UUID] = mapped_column(ForeignKey("trip_stops.id"), index=True); event_type: Mapped[str] = mapped_column(String(64)); occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True)); server_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now()); command_ref: Mapped[str | None] = mapped_column(String(128)); metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+    trip_stop_id: Mapped[UUID] = mapped_column(ForeignKey("trip_stops.id"), index=True); event_type: Mapped[str] = mapped_column(String(64)); occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True)); server_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now()); command_ref: Mapped[str | None] = mapped_column(String(128)); metadata_: Mapped[dict | None] = mapped_column("metadata", JSON); actor_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
 
 
 class ProofOfDelivery(Base):

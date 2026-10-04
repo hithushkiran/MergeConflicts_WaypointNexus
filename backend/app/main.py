@@ -9,7 +9,8 @@ from app.infrastructure.database import database_is_available
 from app.modules.identity.routes import router as identity_router
 from app.modules.dispatcher.routes import router as dispatcher_router
 from app.modules.orders.routes import router as orders_router
-from app.modules.loading.routes import dispatcher as shortfall_router, driver as departure_router, loader as loading_router
+from app.modules.loading.routes import dispatcher as shortfall_router, loader as loading_router
+from app.modules.delivery.routes import router as delivery_router
 
 settings = get_settings()
 
@@ -26,7 +27,7 @@ app.include_router(orders_router)
 app.include_router(dispatcher_router)
 app.include_router(loading_router)
 app.include_router(shortfall_router)
-app.include_router(departure_router)
+app.include_router(delivery_router)
 
 
 @app.exception_handler(StarletteHTTPException)

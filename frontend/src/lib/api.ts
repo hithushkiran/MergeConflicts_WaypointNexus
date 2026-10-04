@@ -100,12 +100,22 @@ export interface PlanStop {
 export interface PlanTrip {
   id: string
   vehicle_id: string
+  depot_code: string
+  assigned_driver_id: string | null
+  assigned_driver_name: string | null
   trip_number: number
   brand: string
   district: string
   status: string
   metrics: Record<string, number | boolean>
   stops: PlanStop[]
+}
+
+export interface DriverTrip {
+  id: string; vehicle_id: string; vehicle_type: string | null; depot_code: string | null
+  driver_name: string | null; trip_number: number; brand: string; district: string; status: string
+  plan_version: number | null; manifest_version: number | null
+  stops: Array<{ id: string; sequence_number: number; order_id: string; order_ref: string; outlet_id: string; brand: string; district: string; window_open_time: string | null; window_close_time: string | null; instructions: string | null; planned_arrival: string | null; planned_service_minutes: number | null; status: string; arrived_at: string | null; completed_at: string | null }>
 }
 
 export interface PlanDecision {
@@ -170,6 +180,30 @@ export interface ShortfallItem {
 
 export async function listLoaderTrips(): Promise<LoaderTrip[]> {
   return (await request<{ items: LoaderTrip[] }>('/api/v1/loader/trips')).items
+}
+
+export async function listDispatcherDrivers(): Promise<Array<{ id: string; display_name: string; email: string; depot_code: string | null }>> {
+  return (await request<{ items: Array<{ id: string; display_name: string; email: string; depot_code: string | null }> }>('/api/v1/dispatcher/drivers')).items
+}
+
+export function assignTripDriver(tripId: string, driverId: string): Promise<{ trip_id: string; driver_id: string; driver_name: string }> {
+  return request(`/api/v1/dispatcher/trips/${tripId}/assign`, { method: 'POST', body: JSON.stringify({ driver_id: driverId }) })
+}
+
+export async function listDriverTrips(): Promise<DriverTrip[]> {
+  return (await request<{ items: DriverTrip[] }>('/api/v1/driver/trips')).items
+}
+
+export function departDriverTrip(tripId: string): Promise<{ trip_id: string; status: string }> {
+  return request(`/api/v1/driver/trips/${tripId}/depart`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } })
+}
+
+export function arriveDriverStop(stopId: string): Promise<{ stop_id: string; status: string }> {
+  return request(`/api/v1/driver/stops/${stopId}/arrive`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } })
+}
+
+export function completeDriverStop(stopId: string, payload: { outcome: 'DELIVERED' | 'FAILED'; receiver_name: string; notes: string }): Promise<{ stop_id: string; status: string; trip_status: string }> {
+  return request(`/api/v1/driver/stops/${stopId}/complete`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload) })
 }
 
 export async function listManifestVersions(tripId: string): Promise<LoaderTrip['manifest'][]> {

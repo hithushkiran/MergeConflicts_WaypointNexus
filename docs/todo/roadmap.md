@@ -692,13 +692,13 @@ Only now build the driver experience.
 
 ## 14.1 Trip
 
-* [ ] Trip summary.
-* [ ] Vehicle.
-* [ ] Driver.
-* [ ] Stops.
-* [ ] Outlet information.
-* [ ] Delivery windows.
-* [ ] Instructions.
+* [x] Trip summary.
+* [x] Vehicle.
+* [x] Driver.
+* [x] Stops.
+* [x] Outlet information.
+* [x] Delivery windows.
+* [x] Instructions.
 
 ## 14.2 Stop workflow
 
@@ -742,12 +742,12 @@ Driver must receive only the current acknowledged manifest.
 
 Implement:
 
-* [ ] Receiver.
-* [ ] Outcome.
-* [ ] Timestamp.
-* [ ] Notes.
-* [ ] Signature/photo reference if supported.
-* [ ] Validation.
+* [x] Receiver.
+* [x] Outcome.
+* [x] Timestamp.
+* [x] Notes.
+* [x] Signature/photo reference if supported (no upload/object storage exists; receiver and notes are persisted).
+* [x] Validation.
 
 ### Gate 6 — ONLINE DELIVERY
 

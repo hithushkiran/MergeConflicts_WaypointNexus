@@ -3,13 +3,19 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   ApiError,
   acknowledgeManifest,
+  arriveDriverStop,
+  assignTripDriver,
+  completeDriverStop,
   createDispatcherPlan,
   createStoreOrder,
   currentUser,
+  departDriverTrip,
   getDispatcherPlan,
   getAccessToken,
   getOrderEligibility,
   listDispatcherOrders,
+  listDispatcherDrivers,
+  listDriverTrips,
   listDispatcherPlans,
   listLoaderTrips,
   listManifestVersions,
@@ -23,6 +29,7 @@ import {
   type DispatcherFilters,
   type DispatcherOrder,
   type DispatcherPlan,
+  type DriverTrip,
   type LoaderTrip,
   type ShortfallItem,
   type OrderEligibility,
@@ -234,7 +241,7 @@ function LoaderWorkspace() {
 
   return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="loader-heading">
     <h2 id="loader-heading" className="text-xl font-bold">Loading bay</h2>
-    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest. Driver assignment is not available yet.</p>
+    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest, then acknowledge the version drivers may use.</p>
     {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
       <label className="mt-4 block text-sm">Published trip<select className={fieldClass} value={selected} onChange={(event) => setSelected(event.target.value)}>{trips.map((item) => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
       {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · Driver unassigned</div>
@@ -263,6 +270,45 @@ function LoaderWorkspace() {
       </>}
     </>}
     {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}
+  </section>
+}
+
+function DriverWorkspace() {
+  const [trips, setTrips] = useState<DriverTrip[]>([])
+  const [receiver, setReceiver] = useState<Record<string, string>>({})
+  const [notes, setNotes] = useState<Record<string, string>>({})
+  const [error, setError] = useState('')
+  const [working, setWorking] = useState(false)
+  const refresh = async () => setTrips(await listDriverTrips())
+  useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load assigned trips.')) }, [])
+  async function run(action: () => Promise<unknown>) {
+    setWorking(true); setError('')
+    try { await action(); await refresh() }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not save the delivery update.') }
+    finally { setWorking(false) }
+  }
+  const field = 'mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-slate-50'
+  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="driver-heading">
+    <h2 id="driver-heading" className="text-xl font-bold">My delivery trips</h2>
+    <p className="mt-2 text-sm text-slate-400">Trips appear after the loader checks and acknowledges the current manifest.</p>
+    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No ready or active trips are assigned to you.</p> : <div className="mt-4 space-y-4">{trips.map((trip) => <article key={trip.id} className="rounded-xl border border-slate-700 p-4">
+      <h3 className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</h3>
+      <p className="mt-1 text-xs text-slate-400">{trip.depot_code} · Plan V{trip.plan_version} · Acknowledged manifest V{trip.manifest_version} · {trip.status}</p>
+      {trip.status === 'READY' && <button className="mt-3 rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working} onClick={() => run(() => departDriverTrip(trip.id))}>Start trip</button>}
+      <ol className="mt-4 space-y-3">{trip.stops.map((stop) => <li key={stop.id} className="rounded-lg bg-slate-950 p-3">
+        <p className="font-semibold">{stop.sequence_number}. {stop.order_ref} · {stop.outlet_id}</p>
+        <p className="mt-1 text-sm text-slate-300">{stop.district}{stop.window_open_time && stop.window_close_time ? ` · ${stop.window_open_time}–${stop.window_close_time}` : ''}{stop.planned_arrival ? ` · ETA ${new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' })}` : ''}</p>
+        {stop.instructions && <p className="mt-1 text-sm text-amber-200">Instructions: {stop.instructions}</p>}
+        <p className="mt-1 text-xs text-slate-400">Status: {stop.status}</p>
+        {trip.status === 'IN_PROGRESS' && stop.status === 'PENDING' && <button className="mt-2 rounded border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => run(() => arriveDriverStop(stop.id))}>Arrived</button>}
+        {trip.status === 'IN_PROGRESS' && stop.status === 'ARRIVED' && <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-xs text-slate-300">Receiver name<input className={field} value={receiver[stop.id] ?? ''} onChange={(event) => setReceiver((value) => ({ ...value, [stop.id]: event.target.value }))} /></label>
+          <label className="text-xs text-slate-300">Delivery notes or failure reason<input className={field} value={notes[stop.id] ?? ''} onChange={(event) => setNotes((value) => ({ ...value, [stop.id]: event.target.value }))} /></label>
+          <div className="flex gap-2 sm:col-span-2"><button className="rounded bg-emerald-400 px-3 py-2 font-semibold text-slate-950" disabled={working || !receiver[stop.id]?.trim()} onClick={() => run(() => completeDriverStop(stop.id, { outcome: 'DELIVERED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' }))}>Delivered</button><button className="rounded border border-rose-700 px-3 py-2" disabled={working || !notes[stop.id]?.trim()} onClick={() => run(() => completeDriverStop(stop.id, { outcome: 'FAILED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' }))}>Failed delivery</button></div>
+        </div>}
+      </li>)}</ol>
+    </article>)}</div>}
+    {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}
   </section>
 }
 
@@ -328,6 +374,8 @@ function ShortfallWorkspace() {
 }
 
 function DispatcherWorkspace() {
+  const [drivers, setDrivers] = useState<Array<{ id: string; display_name: string; email: string; depot_code: string | null }>>([])
+  const [driverSelections, setDriverSelections] = useState<Record<string, string>>({})
   const [filters, setFilters] = useState<DispatcherFilters>({})
   const [orders, setOrders] = useState<DispatcherOrder[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
@@ -338,6 +386,19 @@ function DispatcherWorkspace() {
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  useEffect(() => { listDispatcherDrivers().then(setDrivers).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load drivers.')) }, [])
+
+  async function assignDriver(tripId: string, driverId: string) {
+    if (!driverId) return
+    setWorking(true); setError(''); setNotice('')
+    try {
+      await assignTripDriver(tripId, driverId)
+      if (plan) setPlan(await getDispatcherPlan(plan.id))
+      setNotice('Driver assigned to the trip.')
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not assign the driver.') }
+    finally { setWorking(false) }
+  }
 
   useEffect(() => {
     let active = true
@@ -501,6 +562,7 @@ function DispatcherWorkspace() {
           {plan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-4" key={trip.id}>
             <h4 className="font-semibold">{trip.brand} · {trip.district} · {trip.vehicle_id} · Trip {trip.trip_number}</h4>
             <p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg ({trip.metrics.weight_utilization_pct}% capacity) · {trip.metrics.volume_m3} m³ ({trip.metrics.volume_utilization_pct}% capacity) · {trip.metrics.distance_km} km · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p>
+            {plan.status === 'PUBLISHED' && <div className="mt-3 flex flex-wrap items-end gap-2"><label className="text-xs text-slate-300">Driver for {trip.depot_code}<select className={`${inputClass} mt-1 block`} value={driverSelections[trip.id] ?? trip.assigned_driver_id ?? ''} onChange={(event) => setDriverSelections((state) => ({ ...state, [trip.id]: event.target.value }))}><option value="">Choose driver</option>{drivers.filter((driver) => driver.depot_code === trip.depot_code).map((driver) => <option key={driver.id} value={driver.id}>{driver.display_name}</option>)}</select></label><button className="rounded-lg border border-cyan-700 px-3 py-2 text-sm disabled:opacity-50" disabled={working || !(driverSelections[trip.id] ?? trip.assigned_driver_id)} onClick={() => assignDriver(trip.id, driverSelections[trip.id] ?? trip.assigned_driver_id ?? '')}>{trip.assigned_driver_name ? `Assigned: ${trip.assigned_driver_name} · change` : 'Assign driver'}</button></div>}
             <ol className="mt-3 space-y-2 border-l border-slate-700 pl-4 text-sm">{trip.stops.map((stop) => <li key={stop.order_id}><strong>{stop.sequence_number}. {stop.order_ref}</strong> · {stop.outlet_id} · ETA {stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) : 'not set'} · {stop.planned_service_minutes} min service</li>)}</ol>
           </article>)}
         </div>
@@ -614,11 +676,7 @@ function App() {
               <dd className="mt-1 font-semibold">{scope}</dd>
             </div>
           </dl>
-          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : (
-            <p className="mt-8 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">
-              You are signed in. Available workflows will appear here as they are implemented for your role.
-            </p>
-          )}
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
           {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
         </section>
       </main>

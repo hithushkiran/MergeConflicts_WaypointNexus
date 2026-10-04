@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.database import get_db_session
-from app.infrastructure.persistence import AuditEvent, Base, Deferral, Depot, ManifestVersion, Order, Outlet, PlanVersion, Role, Shortfall, Trip, User, Vehicle
+from app.infrastructure.persistence import AuditEvent, Base, Deferral, DeliveryEvent, Depot, ManifestVersion, Order, Outlet, PlanVersion, ProofOfDelivery, Role, Shortfall, Trip, User, Vehicle
 from app.main import app
 from app.modules.identity.security import hash_password
 from app.modules.planning.reference_data import load_planning_reference_data
@@ -181,10 +181,13 @@ def test_loader_shortfall_hold_resolution_revision_and_acknowledgement(dispatche
     plan_id = created.json()["plan"]["id"]
     published = client.post(f"/api/v1/dispatcher/plans/{plan_id}/publish", json={"reason": "ready for loading"}, headers={**dispatcher_headers, "Idempotency-Key": "loader-publish"})
     assert published.status_code == 200
-
+    driver_id = client.get("/api/v1/dispatcher/drivers", headers=dispatcher_headers).json()["items"][0]["id"]
     trips = client.get("/api/v1/loader/trips", headers=loader_headers)
     assert trips.status_code == 200
     trip = trips.json()["items"][0]
+    trip_ids = client.get(f"/api/v1/dispatcher/plans/{plan_id}", headers=dispatcher_headers).json()["plan"]["trips"]
+    assigned_trip = next(item for item in trip_ids if item["vehicle_id"] == trip["vehicle_id"] and item["trip_number"] == trip["trip_number"])
+    assert client.post(f"/api/v1/dispatcher/trips/{assigned_trip['id']}/assign", headers=dispatcher_headers, json={"driver_id": driver_id}).status_code == 200
     line = trip["manifest"]["lines"][0]
     bad_check = client.post(f"/api/v1/loader/trips/{trip['id']}/checks", headers=loader_headers, json={
         "manifest_version": 1,
@@ -198,7 +201,7 @@ def test_loader_shortfall_hold_resolution_revision_and_acknowledgement(dispatche
     shortfalls = client.get("/api/v1/dispatcher/shortfalls", headers=dispatcher_headers)
     assert shortfalls.status_code == 200
     issue = next(item for item in shortfalls.json()["items"] if item["trip_id"] == trip["id"])
-    blocked = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers=driver_headers)
+    blocked = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver_headers, "Idempotency-Key": "blocked-depart"})
     assert blocked.status_code == 409
     assert blocked.json()["detail"]["code"] == "DEPARTURE_BLOCKED"
     resolved = client.post(f"/api/v1/dispatcher/shortfalls/{issue['id']}/resolve", headers=dispatcher_headers,
@@ -213,10 +216,49 @@ def test_loader_shortfall_hold_resolution_revision_and_acknowledgement(dispatche
     ack = client.post(f"/api/v1/loader/manifests/{current.json()['manifest']['id']}/acknowledge", headers=loader_headers)
     assert ack.status_code == 200, ack.text
     assert ack.json()["trip_status"] == "READY"
-    assert client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers=driver_headers).json()["detail"]["code"] == "TRIP_NOT_READY"
+    departed = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver_headers, "Idempotency-Key": "ready-depart"})
+    assert departed.status_code == 200, departed.text
+    assert departed.json()["status"] == "IN_PROGRESS"
     with factory() as session:
         assert session.scalar(select(Shortfall).where(Shortfall.id == UUID(issue["id"]))).status == "RESOLVED"
         assert session.scalar(select(ManifestVersion).where(ManifestVersion.trip_id == UUID(trip["id"]), ManifestVersion.version_number == 2)) is not None
+
+
+def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatcher_factory):
+    client, factory = dispatcher_factory
+    dispatcher = auth(client)
+    loader = auth(client, "loader@test.local")
+    driver = auth(client, "driver@test.local")
+    plan = client.post("/api/v1/dispatcher/plans", json={"planning_date": PLANNING_DATE.isoformat()}, headers={**dispatcher, "Idempotency-Key": "driver-candidate"}).json()["plan"]
+    assert client.post(f"/api/v1/dispatcher/plans/{plan['id']}/publish", json={}, headers={**dispatcher, "Idempotency-Key": "driver-publish"}).status_code == 200
+    driver_id = client.get("/api/v1/dispatcher/drivers", headers=dispatcher).json()["items"][0]["id"]
+    trip = client.get("/api/v1/loader/trips", headers=loader).json()["items"][0]
+    planned_trips = client.get(f"/api/v1/dispatcher/plans/{plan['id']}", headers=dispatcher).json()["plan"]["trips"]
+    planned_trip = next(item for item in planned_trips if item["vehicle_id"] == trip["vehicle_id"] and item["trip_number"] == trip["trip_number"])
+    assert client.post(f"/api/v1/dispatcher/trips/{planned_trip['id']}/assign", headers=dispatcher, json={"driver_id": driver_id}).status_code == 200
+    assert client.get("/api/v1/driver/trips", headers=driver).json()["items"] == []
+    checked = client.post(f"/api/v1/loader/trips/{trip['id']}/checks", headers=loader, json={
+        "manifest_version": 1,
+        "lines": [{"order_id": line["order_id"], "status": "LOADED", "quantity": line["expected_quantity"]} for line in trip["manifest"]["lines"]],
+    })
+    assert checked.status_code == 200
+    manifest = client.get(f"/api/v1/loader/trips/{trip['id']}/manifest", headers=loader).json()["manifest"]
+    assert client.post(f"/api/v1/loader/manifests/{manifest['id']}/acknowledge", headers=loader).status_code == 200
+    my_trip = client.get("/api/v1/driver/trips", headers=driver).json()["items"][0]
+    assert my_trip["manifest_version"] == manifest["version_number"]
+    departed = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver, "Idempotency-Key": "trip-start"})
+    assert departed.status_code == 200, departed.text
+    assert client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver, "Idempotency-Key": "trip-start"}).json()["replayed"] is True
+    stops = my_trip["stops"]
+    for index, stop in enumerate(stops):
+        arrived = client.post(f"/api/v1/driver/stops/{stop['id']}/arrive", headers={**driver, "Idempotency-Key": f"arrive-{index}"})
+        assert arrived.status_code == 200, arrived.text
+        completed = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers={**driver, "Idempotency-Key": f"complete-{index}"}, json={"outcome": "DELIVERED", "receiver_name": "Receiving team", "notes": "Left at receiving bay"})
+        assert completed.status_code == 200, completed.text
+    with factory() as session:
+        assert session.get(Trip, UUID(trip["id"])).status == "COMPLETED"
+        assert session.scalar(select(ProofOfDelivery).where(ProofOfDelivery.outcome == "DELIVERED")) is not None
+        assert session.scalar(select(DeliveryEvent).where(DeliveryEvent.event_type == "ARRIVED")) is not None
 
 
 def test_shortfall_reallocation_creates_capacity_checked_plan_and_revised_manifests(dispatcher_factory):
