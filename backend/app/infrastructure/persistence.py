@@ -199,12 +199,26 @@ class Receipt(Base):
     __tablename__ = "receipts"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id"), unique=True); trip_stop_id: Mapped[UUID | None] = mapped_column(ForeignKey("trip_stops.id")); status: Mapped[str] = mapped_column(String(32)); confirmed_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id")); confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); notes: Mapped[str | None] = mapped_column(Text)
+    receiver_name: Mapped[str | None] = mapped_column(String(120))
+    ordered_quantity: Mapped[int | None] = mapped_column(Integer)
+    dispatched_quantity: Mapped[int | None] = mapped_column(Integer)
+    received_quantity: Mapped[int | None] = mapped_column(Integer)
+    manifest_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("manifest_versions.id"))
+    __table_args__ = (
+        CheckConstraint("received_quantity >= 0", name="ck_receipts_received_nonnegative"),
+        CheckConstraint("received_quantity <= dispatched_quantity", name="ck_receipts_received_dispatched"),
+    )
 
 
 class DeliveryIssue(Base):
     __tablename__ = "delivery_issues"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     receipt_id: Mapped[UUID | None] = mapped_column(ForeignKey("receipts.id")); order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id")); issue_type: Mapped[str] = mapped_column(String(64)); notes: Mapped[str | None] = mapped_column(Text); status: Mapped[str] = mapped_column(String(32)); reported_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id")); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    affected_quantity: Mapped[int | None] = mapped_column(Integer)
+    resolution_notes: Mapped[str | None] = mapped_column(Text)
+    resolved_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("affected_quantity > 0", name="ck_delivery_issues_positive_quantity"),)
 
 
 class AuditEvent(Base):

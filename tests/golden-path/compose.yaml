@@ -1,0 +1,22 @@
+# Isolated synthetic acceptance stack. Does not reuse or reset the normal DB volume.
+services:
+  db:
+    environment:
+      POSTGRES_DB: waypoint_t09
+      POSTGRES_USER: waypoint
+      POSTGRES_PASSWORD: waypoint_local_password
+    ports: !override ["5434:5432"]
+  api:
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://waypoint:waypoint_local_password@db:5432/waypoint_t09
+      DEV_SEED_PASSWORD: waypoint-local-demo
+      CORS_ORIGINS: http://localhost:5174
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed --demo-only && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    volumes: !override
+      - ./.t09-verification/planning:/app/local-data:ro
+    ports: !override ["8001:8000"]
+  web:
+    environment:
+      VITE_API_URL: http://localhost:8001
+    ports: !override ["5174:5173"]

@@ -11,6 +11,7 @@ from app.modules.dispatcher.routes import router as dispatcher_router
 from app.modules.orders.routes import router as orders_router
 from app.modules.loading.routes import dispatcher as shortfall_router, loader as loading_router
 from app.modules.delivery.routes import router as delivery_router
+from app.modules.receipt.routes import store as receipt_router, dispatcher as delivery_issue_router
 
 settings = get_settings()
 
@@ -28,6 +29,8 @@ app.include_router(dispatcher_router)
 app.include_router(loading_router)
 app.include_router(shortfall_router)
 app.include_router(delivery_router)
+app.include_router(receipt_router)
+app.include_router(delivery_issue_router)
 
 
 @app.exception_handler(StarletteHTTPException)

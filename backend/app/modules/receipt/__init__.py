@@ -1,1 +1,1 @@
-"""Receipt module placeholder."""
+"""Store receiving and dispatcher discrepancy review."""
