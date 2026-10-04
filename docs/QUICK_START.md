@@ -100,4 +100,9 @@ Avoid `docker compose down -v` unless you intentionally want to permanently dele
 - `backend/demo-data/` — synthetic local fixtures
 - `docs/api-contracts.md` — versioned API contracts
 - `docs/todo/README.md` and `docs/todo/roadmap.md` — work queue and roadmap
+- `docs/UI_IMPLEMENTATION_HANDOFF.md` — Figma screen/API comparison, UI rebuild sequence, and human/AI handoff
 - `docs/FOUNDATION_HANDOFF.md` — foundation and module handoff notes
+
+## Continue project work
+
+The next work is T09 (store receipt and the complete golden path), followed by T10 (implement the core role-based UI from Figma). Read `docs/todo/README.md` for the task board and claim rules, then `docs/UI_IMPLEMENTATION_HANDOFF.md` for screen support, known backend gaps, design assumptions, and acceptance guidance. The Figma link and current APIs are mapped there so a teammate can start without relying on chat history. Do not implement optional panels with fabricated data; agree their data sources and API contracts first.
