@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import StoreReceipts from './StoreReceipts'
 import DeliveryIssues from './DeliveryIssues'
 
@@ -670,6 +670,70 @@ function DispatcherWorkspace() {
   )
 }
 
+const roleNavigation: Record<UserProfile['role'], Array<{ label: string; href: string }>> = {
+  STORE: [
+    { label: 'Orders', href: '#store-orders-heading' },
+    { label: 'Deliveries & receipts', href: '#receipts-heading' },
+  ],
+  DISPATCHER: [
+    { label: 'Plan review', href: '#dispatcher-heading' },
+    { label: 'Exceptions', href: '#shortfall-heading' },
+    { label: 'Receiving issues', href: '#delivery-issues-heading' },
+  ],
+  LOADER: [{ label: 'Loading bay', href: '#loader-heading' }],
+  DRIVER: [{ label: 'Route & delivery', href: '#driver-heading' }],
+}
+
+function AppShell({
+  user,
+  scope,
+  onSignOut,
+  children,
+}: {
+  user: UserProfile
+  scope: string
+  onSignOut: () => void
+  children: ReactNode
+}) {
+  const navigation = roleNavigation[user.role]
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#workspace-content">Skip to workspace</a>
+      <header className="app-header">
+        <div className="app-header__inner">
+          <a className="brand" href="#workspace-content" aria-label="Waypoint Nexus workspace">
+            <span className="brand__mark" aria-hidden="true">W</span>
+            <span><strong>Waypoint</strong><span className="brand__muted"> Nexus</span></span>
+          </a>
+          <div className="account-bar">
+            <div className="account-context">
+              <span className="account-context__name">{user.display_name}</span>
+              <span className="account-context__scope">{scope}</span>
+            </div>
+            <span className="role-badge">{user.role}</span>
+            <button className="header-action" onClick={onSignOut} type="button">Sign out</button>
+          </div>
+        </div>
+      </header>
+      <nav className="role-nav" aria-label={`${user.role.toLowerCase()} workspace navigation`}>
+        <div className="role-nav__inner">
+          {navigation.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
+        </div>
+      </nav>
+      <main id="workspace-content" className="workspace-main">
+        <div className="workspace-intro">
+          <div>
+            <p className="eyebrow">{user.role} workspace</p>
+            <h1>{user.role === 'STORE' ? 'Manage your deliveries' : user.role === 'DISPATCHER' ? 'Coordinate today’s network' : user.role === 'LOADER' ? 'Prepare the outbound route' : 'Complete your delivery route'}</h1>
+          </div>
+          <p className="workspace-intro__hint">Live status is sourced from Waypoint Nexus APIs.</p>
+        </div>
+        <div className="workspace-content">{children}</div>
+      </main>
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [checkingSession, setCheckingSession] = useState(() => Boolean(getAccessToken()))
@@ -735,35 +799,10 @@ function App() {
   if (user) {
     const scope = user.outlet_id ? `Outlet ${user.outlet_id}` : user.depot_code ? `Depot ${user.depot_code}` : 'All operations'
     return (
-      <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-50">
-        <section className="mx-auto max-w-3xl rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-xl">
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Waypoint Nexus</p>
-              <h1 className="mt-3 text-3xl font-bold">Welcome, {user.display_name}</h1>
-            </div>
-            <button
-              className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-300"
-              onClick={handleSignOut}
-              type="button"
-            >
-              Sign out
-            </button>
-          </header>
-          <dl className="mt-8 grid gap-5 border-t border-slate-800 pt-6 sm:grid-cols-2">
-            <div>
-              <dt className="text-sm text-slate-400">Role</dt>
-              <dd className="mt-1 font-semibold">{user.role}</dd>
-            </div>
-            <div>
-              <dt className="text-sm text-slate-400">Access scope</dt>
-              <dd className="mt-1 font-semibold">{scope}</dd>
-            </div>
-          </dl>
+      <AppShell user={user} scope={scope} onSignOut={() => void handleSignOut()}>
           {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /><DeliveryIssues /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
           {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
-        </section>
-      </main>
+      </AppShell>
     )
   }
 
