@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import StoreWorkspace from './StoreWorkspace'
 import AppShell from './AppShell'
 import { allowedPage, type WorkspacePage } from '../lib/navigation'
-import { Alert, Facts, PageHeading, Panel } from './ui'
+import { Alert, Button, Facts, PageHeading, Panel, StatusBadge } from './ui'
+import { DriverSyncStatus, WorkflowStats, WorkflowSteps } from './Workflow'
+import { receivingTime } from '../lib/receivingTime'
 import DeliveryIssues from './DeliveryIssues'
 
 import {
@@ -46,7 +48,11 @@ import {
   type QueuedDriverCommand,
 } from '../lib/driverOffline'
 
-function LoaderWorkspace() {
+export function LoaderWorkspace() {
+  const heading = useRef<HTMLElement>(null)
+  const [step, setStep] = useState(0)
+  useEffect(() => { heading.current?.querySelector('h1')?.focus() }, [step])
+  const [loading, setLoading] = useState(true)
   const [trips, setTrips] = useState<LoaderTrip[]>([])
   const [manifestHistory, setManifestHistory] = useState<LoaderTrip['manifest'][]>([])
   const [selected, setSelected] = useState<string>('')
@@ -58,9 +64,12 @@ function LoaderWorkspace() {
   const [working, setWorking] = useState(false)
 
   async function refresh() {
-    const items = await listLoaderTrips()
-    setTrips(items)
-    setSelected((current) => current || items[0]?.id || '')
+    setLoading(true)
+    try {
+      const items = await listLoaderTrips()
+      setTrips(items)
+      setSelected((current) => items.some(item => item.id === current) ? current : items[0]?.id || '')
+    } finally { setLoading(false) }
   }
   useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load trips.')) }, [])
   const trip = trips.find((item) => item.id === selected)
@@ -70,6 +79,7 @@ function LoaderWorkspace() {
     if (!selectedTripId) { setManifestHistory([]); return }
     listManifestVersions(selectedTripId).then(setManifestHistory).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load manifest history.'))
   }, [selectedTripId, selectedManifestVersion])
+  useEffect(() => { setStatuses({}); setQuantities({}); setNotes({}) }, [selectedTripId, selectedManifestVersion])
   const fieldClass = 'mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-50'
 
   async function saveChecks() {
@@ -94,41 +104,48 @@ function LoaderWorkspace() {
     finally { setWorking(false) }
   }
 
-  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="loader-heading">
-    <h2 id="loader-heading" className="text-xl font-bold">Loading bay</h2>
-    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest, then acknowledge the version drivers may use.</p>
-    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
-      <label className="mt-4 block text-sm">Published trip<select className={fieldClass} value={selected} onChange={(event) => setSelected(event.target.value)}>{trips.map((item) => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
-      {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · Driver unassigned</div>
-        {manifestHistory.length > 1 && <div className="mt-3 rounded-lg border border-cyan-900 p-3"><p className="text-sm font-semibold">Manifest changes</p><ul className="mt-2 space-y-1 text-xs text-slate-300">{manifestHistory.slice(1).map((version, index) => {
+  const steps = ['Route Overview', 'Loading Checklist', 'Staging Exception', 'Revised Manifest']
+  const blocked = trip?.status === 'DISPATCH_HOLD'
+  return <section ref={heading} className="wp-operational wp-loader" aria-label="Loading operations">
+    <PageHeading title={steps[step]} description="Verify the current manifest before acknowledging it for driver departure." actions={<Button variant="secondary" disabled={loading || working} onClick={() => { setError(''); void refresh().catch(cause => setError(cause instanceof ApiError ? cause.message : 'Could not refresh trips.')) }}>Refresh trips</Button>} />
+    <WorkflowSteps steps={steps} active={step} onSelect={setStep} />
+    {error && <Alert tone="error">{error}</Alert>}{notice && <Alert tone="success">{notice}</Alert>}
+    {loading ? <Panel><p role="status">Loading published trips…</p></Panel> : !trip ? <Panel>No published trips are available for this depot.</Panel> : <>
+      <Panel className="wp-context-strip"><label className="wp-muted">Published trip<select className={fieldClass} value={selected} onChange={event => { setSelected(event.target.value); setNotice(''); setError(''); setStep(0) }}>{trips.map(item => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
+        <Facts values={{ Vehicle: trip.vehicle_id, 'Manifest': 'V' + trip.manifest.version_number, 'Driver': trip.driver ?? 'Not supplied by loader API', 'Departure': trip.departure ? receivingTime(trip.departure) : 'Not supplied', 'Trip state': <StatusBadge status={trip.status} /> }} />
+      </Panel>
+      {blocked && <Alert tone="error"><strong>Departure Held — Dispatcher Decision Required</strong><p>The server blocks departure while the loading exception remains unresolved. There is no loader gate override.</p></Alert>}
+      <WorkflowStats values={{ 'Shipment lines': trip.manifest.lines.length, 'Verified loaded lines': trip.manifest.lines.filter(line => line.status === 'LOADED').length, 'Manifest version': 'V' + trip.manifest.version_number, 'Acknowledgement': trip.manifest.acknowledged_at ? 'Recorded' : 'Required' }} />
+      {step === 0 && <Panel title="Staged Manifest for Route"><div className="wp-shipment-list">{trip.manifest.lines.map(line => <article key={line.order_id}><div><strong>{line.load_sequence}. {line.order_ref}</strong><StatusBadge status={line.status} /></div><Facts values={{ Outlet: line.outlet_id, 'Expected': line.expected_quantity + ' units', 'Recorded loaded': line.loaded_quantity + ' units' }} /></article>)}</div><div className="wp-form-footer"><Button onClick={() => setStep(1)}>Open Loading Checklist</Button></div></Panel>}
+      {step === 1 && <Panel title="Physical Manifest Verification"><p className="wp-muted">Enter actual units. Missing/damaged quantities describe affected units, not payload weight.</p><fieldset disabled={working || Boolean(trip.manifest.acknowledged_at)} className="wp-shipment-list">{trip.manifest.lines.map(line => <article key={line.order_id}>
+        <div><strong>{line.load_sequence}. {line.order_ref}</strong><StatusBadge status={line.status} /></div><p className="wp-muted">{line.outlet_id} · expected {line.expected_quantity} units</p>
+        <div className="wp-form-grid"><label>Result<select className={fieldClass} value={statuses[line.order_id] ?? (line.status === 'PENDING' ? 'LOADED' : line.status)} onChange={event => setStatuses(state => ({ ...state, [line.order_id]: event.target.value }))}><option>LOADED</option><option>MISSING</option><option>DAMAGED</option><option>SUBSTITUTE</option></select></label>
+        <label>Quantity (loaded or affected units)<input className={fieldClass} min="0" max={line.expected_quantity} step="1" type="number" value={quantities[line.order_id] ?? line.expected_quantity} onChange={event => setQuantities(state => ({ ...state, [line.order_id]: event.target.value }))} /></label>
+        <label className="wp-wide">Notes<input className={fieldClass} maxLength={1000} value={notes[line.order_id] ?? ''} onChange={event => setNotes(state => ({ ...state, [line.order_id]: event.target.value }))} /></label></div></article>)}</fieldset>
+        <div className="wp-form-footer"><Button disabled={working || Boolean(trip.manifest.acknowledged_at)} onClick={() => void saveChecks()}>Save Loading Checks</Button><Button variant="secondary" onClick={() => setStep(2)}>Review Staging Exceptions</Button></div></Panel>}
+      {step === 2 && <div className="wp-two-column"><Panel title="Staging Exception & Departure Hold">{trip.manifest.lines.filter(line => line.status !== 'LOADED' && line.status !== 'PENDING').map(line => <article className="wp-exception-card" key={line.order_id}><strong>{line.order_ref}</strong><Facts values={{ Expected: line.expected_quantity + ' units', 'Recorded loaded': line.loaded_quantity + ' units', Result: line.status }} /><p className="wp-muted">{line.notes ?? 'No loading note recorded.'}</p></article>)}
+        {!trip.manifest.lines.some(line => line.status !== 'LOADED' && line.status !== 'PENDING') && <p className="wp-muted">No exception lines in this manifest. Trip state remains authoritative; refresh after dispatcher review.</p>}</Panel>
+        <Panel title="Dispatcher Handoff"><p className="wp-muted">Exceptions are saved to the dispatch queue. After a decision creates a revised manifest, verify its quantities and acknowledge that exact version.</p><div className="wp-form-footer"><Button onClick={() => setStep(3)}>Review Revised Manifest</Button></div></Panel></div>}
+      {step === 3 && <div className="wp-two-column"><Panel title={'Current Manifest · V' + trip.manifest.version_number}><div className="wp-shipment-list">{trip.manifest.lines.map(line => <article key={line.order_id}><strong>{line.order_ref}</strong><Facts values={{ 'Approved units': line.expected_quantity, 'Recorded loaded units': line.loaded_quantity, 'Status': <StatusBadge status={line.status} /> }} /></article>)}</div>
+        <h3 className="wp-section-label">Version Changes</h3><ul className="wp-history">{manifestHistory.slice(1).map((version, index) => {
           const previous = manifestHistory[index]
-          const oldByOrder = new Map(previous.lines.map((line) => [line.order_id, line]))
-          const changes = version.lines.flatMap((line) => {
-            const old = oldByOrder.get(line.order_id)
-            if (!old) return [`${line.order_ref} added`]
-            return old.expected_quantity !== line.expected_quantity || old.status !== line.status
-              ? [`${line.order_ref}: ${old.expected_quantity} ${old.status.toLowerCase()} → ${line.expected_quantity} ${line.status.toLowerCase()}`]
-              : []
+          const changes = version.lines.flatMap(line => {
+            const before = previous.lines.find(item => item.order_id === line.order_id)
+            return !before ? [line.order_ref + ' added'] : before.expected_quantity !== line.expected_quantity || before.status !== line.status ? [line.order_ref + ': ' + before.expected_quantity + ' ' + before.status + ' → ' + line.expected_quantity + ' ' + line.status] : []
           })
-          for (const line of previous.lines) if (!version.lines.some((next) => next.order_id === line.order_id)) changes.push(`${line.order_ref} removed from this trip`)
-          return <li key={version.id}>V{previous.version_number} → V{version.version_number}: {changes.length ? changes.join('; ') : 'no line changes'}</li>
-        })}</ul></div>}
-        <div className="mt-3 space-y-3">{trip.manifest.lines.map((line) => <article key={line.order_id} className="rounded-lg border border-slate-800 p-3">
-          <p className="font-semibold">{line.load_sequence}. {line.order_ref} <span className="font-normal text-slate-400">· {line.outlet_id} · expected {line.expected_quantity}</span></p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <label className="text-xs text-slate-300">Result<select className={fieldClass} value={statuses[line.order_id] ?? (line.status === 'PENDING' ? 'LOADED' : line.status)} onChange={(event) => setStatuses((state) => ({ ...state, [line.order_id]: event.target.value }))}><option>LOADED</option><option>MISSING</option><option>DAMAGED</option><option>SUBSTITUTE</option></select></label>
-            <label className="text-xs text-slate-300">Quantity (loaded, or affected if missing/damaged)<input className={fieldClass} min="0" max={line.expected_quantity} type="number" value={quantities[line.order_id] ?? line.expected_quantity} onChange={(event) => setQuantities((state) => ({ ...state, [line.order_id]: event.target.value }))} /></label>
-            <label className="text-xs text-slate-300">Notes<input className={fieldClass} value={notes[line.order_id] ?? ''} onChange={(event) => setNotes((state) => ({ ...state, [line.order_id]: event.target.value }))} /></label>
-          </div>
-        </article>)}</div>
-        <div className="mt-4 flex flex-wrap gap-3"><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working} onClick={saveChecks}>Save loading checks</button><button className="rounded-lg border border-slate-600 px-4 py-2 disabled:opacity-50" disabled={working || Boolean(trip.manifest.acknowledged_at)} onClick={acknowledge}>Acknowledge current manifest</button></div>
-      </>}
+          for (const line of previous.lines) if (!version.lines.some(item => item.order_id === line.order_id)) changes.push(line.order_ref + ' removed')
+          return <li key={version.id}>V{previous.version_number} → V{version.version_number}: {changes.join('; ') || 'No line changes'}</li>
+        })}</ul>{manifestHistory.length < 2 && <p className="wp-muted">No previous revision is available.</p>}</Panel>
+        <Panel title="Manifest Acknowledgement"><StatusBadge status={trip.status} /><p className="wp-muted">Acknowledgement is the supported readiness action. The server requires every line to be loaded and no blocking shortfall. Physical seals, dock sensors and gate hardware are not connected.</p><div className="wp-form-footer"><Button disabled={working || blocked || Boolean(trip.manifest.acknowledged_at) || trip.manifest.lines.some(line => line.status !== 'LOADED')} onClick={() => void acknowledge()}>{trip.manifest.acknowledged_at ? 'Manifest Acknowledged' : 'Acknowledge Current Manifest'}</Button><Button variant="secondary" onClick={() => setStep(1)}>Back to Checklist</Button></div></Panel></div>}
     </>}
-    {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}
   </section>
 }
 
-function DriverWorkspace() {
+export function DriverWorkspace() {
+  const heading = useRef<HTMLElement>(null)
+  const [view, setView] = useState<'route' | 'stop' | 'proof' | 'sync'>('route')
+  useEffect(() => { heading.current?.querySelector('h1')?.focus() }, [view])
+  const [selectedStop, setSelectedStop] = useState('')
   const [user] = useState<UserProfile | null>(() => getCachedDriverProfile())
   const [trips, setTrips] = useState<DriverTrip[]>([])
   const [receiver, setReceiver] = useState<Record<string, string>>({})
@@ -202,38 +219,40 @@ function DriverWorkspace() {
       await enqueueDriverCommand(userId, command)
       await refresh()
       if (navigator.onLine) void sync()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save the delivery update offline.') }
+      return true
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save the delivery update offline.'); return false }
     finally { setWorking(false) }
   }
-  const field = 'mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-slate-50'
-  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="driver-heading">
-    <h2 id="driver-heading" className="text-xl font-bold">My delivery trips</h2>
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm"><span className={online && serverConnected ? 'text-emerald-300' : 'text-amber-200'}>{online && serverConnected ? 'Connected' : 'Offline · saved on this device'} · {outbox.length} update{outbox.length === 1 ? '' : 's'} waiting{syncing ? ' · syncing…' : ''}</span><button className="rounded border border-slate-600 px-3 py-1.5 disabled:opacity-50" disabled={!online || syncing || outbox.length === 0} onClick={() => void sync()} type="button">Sync now</button></div>
-    <p className="mt-2 text-sm text-slate-400">Trips and acknowledged manifest details are saved on this device while connected.</p>
-    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No ready or active trips are assigned to you.</p> : <div className="mt-4 space-y-4">{trips.map((trip) => <article key={trip.id} className="rounded-xl border border-slate-700 p-4">
-      <h3 className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</h3>
-      <p className="mt-1 text-xs text-slate-400">{trip.depot_code} · Plan V{trip.plan_version} · Acknowledged manifest V{trip.manifest_version} · {trip.status}</p>
-      {trip.manifest && <details className="mt-2 text-xs text-slate-300"><summary>Manifest V{trip.manifest.version_number} · {trip.manifest.lines.length} orders</summary><ul className="mt-2 space-y-1">{trip.manifest.lines.map((line) => <li key={line.order_id}>{line.sequence_number}. {line.order_ref} · {line.outlet_id} · {line.loaded_quantity}/{line.expected_quantity} · {line.status}</li>)}</ul></details>}
-      {trip.status === 'READY' && <button className="mt-3 rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working} onClick={() => void queue({ kind: 'DEPART', trip_id: trip.id })}>Start trip</button>}
-      <ol className="mt-4 space-y-3">{trip.stops.map((stop, stopIndex) => {
-        const previousStopsDone = trip.stops.slice(0, stopIndex).every((previous) => previous.status === 'DELIVERED' || previous.status === 'FAILED')
-        const localPending = outbox.some((entry) => entry.command.trip_id === trip.id && 'stop_id' in entry.command && entry.command.stop_id === stop.id)
-        const savedReceiver = receiver[stop.id] ?? stop.receiver_name ?? ''
-        const savedNotes = notes[stop.id] ?? stop.delivery_notes ?? ''
-        return <li key={stop.id} className="rounded-lg bg-slate-950 p-3">
-        <p className="font-semibold">{stop.sequence_number}. {stop.order_ref} · {stop.outlet_id}</p>
-        <p className="mt-1 text-sm text-slate-300">{stop.district}{stop.window_open_time && stop.window_close_time ? ` · ${stop.window_open_time}–${stop.window_close_time}` : ''}{stop.planned_arrival ? ` · ETA ${new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' })}` : ''}</p>
-        {stop.instructions && <p className="mt-1 text-sm text-amber-200">Instructions: {stop.instructions}</p>}
-        <p className="mt-1 text-xs text-slate-400">Status: {stop.status}{localPending ? ' · waiting to sync' : ''}</p>
-        {trip.status === 'IN_PROGRESS' && stop.status === 'PENDING' && previousStopsDone && <button className="mt-2 rounded border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => void queue({ kind: 'ARRIVE', trip_id: trip.id, stop_id: stop.id })}>Arrived</button>}
-        {trip.status === 'IN_PROGRESS' && stop.status === 'ARRIVED' && <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <label className="text-xs text-slate-300">Receiver name<input className={field} value={receiver[stop.id] ?? stop.receiver_name ?? ''} onChange={(event) => { const value = event.target.value; setReceiver((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, value, notes[stop.id] ?? stop.delivery_notes ?? '') }} /></label>
-          <label className="text-xs text-slate-300">Delivery notes or failure reason<input className={field} value={notes[stop.id] ?? stop.delivery_notes ?? ''} onChange={(event) => { const value = event.target.value; setNotes((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, receiver[stop.id] ?? stop.receiver_name ?? '', value) }} /></label>
-          <div className="flex gap-2 sm:col-span-2"><button className="rounded bg-emerald-400 px-3 py-2 font-semibold text-slate-950" disabled={working || !savedReceiver.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'DELIVERED', receiver_name: savedReceiver, notes: savedNotes })}>Delivered</button><button className="rounded border border-rose-700 px-3 py-2" disabled={working || !savedNotes.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'FAILED', receiver_name: savedReceiver, notes: savedNotes })}>Failed delivery</button></div>
-        </div>}
-      </li>})}</ol>
-    </article>)}</div>}
-    {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}
+  const field = 'wp-input'
+  const connected = online && serverConnected
+  const selectedTrip = trips.find(trip => trip.stops.some(stop => stop.id === selectedStop))
+  const stop = selectedTrip?.stops.find(item => item.id === selectedStop)
+  const pendingProof = outbox.some(entry => entry.command.kind === 'COMPLETE' && 'stop_id' in entry.command && entry.command.stop_id === selectedStop)
+  const completed = stop?.status === 'DELIVERED' && Boolean(stop.completed_at) && !pendingProof
+  return <section ref={heading} className="wp-operational wp-driver" aria-label="Driver delivery workflow">
+    <PageHeading title={view === 'route' ? 'Manifest & Route' : view === 'proof' ? 'Delivery Proof' : view === 'sync' ? 'Saved Updates & Sync' : 'Stop Detail'} description="Your assigned route and latest acknowledged manifest." actions={view !== 'route' && <Button variant="secondary" onClick={() => setView('route')}>Back to Route</Button>} />
+    {error && <Alert tone="error">{error}</Alert>}
+    {(view === 'route' || view === 'sync') && <><DriverSyncStatus online={connected} pending={outbox.length} syncing={syncing} completed={completed} /><div className="wp-driver-sync-action"><Button variant="secondary" disabled={!online || syncing} onClick={() => void sync()}>{syncing ? 'Syncing…' : 'Sync Now'}</Button>{view !== 'sync' && <Button variant="secondary" onClick={() => setView('sync')}>View Saved Updates</Button>}</div></>}
+    {view === 'sync' && <><Panel title="Local Queue Monitor">{outbox.length === 0 ? <p className="wp-muted">No pending local updates. This alone does not confirm that a particular delivery has completed.</p> : <ul className="wp-history">{outbox.map(entry => <li key={entry.id}><strong>{entry.command.kind.replace(/_/g, ' ')}</strong> · <StatusBadge status={entry.state} /><p className="wp-muted">Command {entry.id}</p>{entry.error && <p>{entry.error}</p>}</li>)}</ul>}</Panel>{stop && <Panel title="Delivery Record"><Facts values={{ Order: stop.order_ref, Outlet: stop.outlet_id, Status: stop.status, 'Completion time': stop.completed_at ? new Date(stop.completed_at).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' }) + ' Colombo' : 'Not yet recorded' }} /></Panel>}</>}
+    {view === 'route' && (trips.length === 0 ? <Panel>No ready or active trips are assigned to you.</Panel> : trips.map(trip => <Panel key={trip.id} title={trip.vehicle_id + ' · Trip ' + trip.trip_number}>
+      <StatusBadge status={trip.status} /><Facts values={{ Origin: trip.depot_code ?? 'Not supplied', Destination: trip.district, Brand: trip.brand, 'Plan': 'V' + trip.plan_version, 'Approved manifest': 'V' + trip.manifest_version }} />
+      {trip.manifest && <><h3 className="wp-section-label">Approved Delivery Lines</h3><div className="wp-shipment-list">{trip.manifest.lines.map(line => <article key={line.order_id}><strong>{line.order_ref}</strong><Facts values={{ Outlet: line.outlet_id, 'Approved': line.expected_quantity + ' units', 'Loaded': line.loaded_quantity + ' units', Status: line.status }} />{line.notes && <p className="wp-muted">{line.notes}</p>}</article>)}</div></>}
+      {trip.status === 'READY' && <div className="wp-form-footer"><Button disabled={working} onClick={() => void queue({ kind: 'DEPART', trip_id: trip.id })}>Start Trip</Button></div>}
+      <h3 className="wp-section-label">Route Stops · Planned ETAs</h3><ol className="wp-driver-stops">{trip.stops.map(item => <li key={item.id}><div><strong>{item.sequence_number}. {item.outlet_id}</strong><StatusBadge status={item.status} /></div><p className="wp-muted">{item.order_ref} · {item.district}</p><Button variant="secondary" onClick={() => { setSelectedStop(item.id); setView('stop') }}>View Stop</Button></li>)}</ol>
+    </Panel>))}
+    {(view === 'stop' || view === 'proof') && stop && selectedTrip && <>
+      <Panel title={stop.outlet_id}><StatusBadge status={stop.status} /><p className="wp-muted">{stop.order_ref} · {selectedTrip.vehicle_id}</p><Facts values={{ 'Planned arrival': stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) + ' Colombo' : 'Not supplied', 'Receiving window': stop.window_open_time && stop.window_close_time ? stop.window_open_time + '–' + stop.window_close_time : 'Not supplied', Origin: selectedTrip.depot_code ?? 'Not supplied' }} />{stop.instructions && <Alert tone="warning">{stop.instructions}</Alert>}</Panel>
+      <Panel title="Approved Handover Quantity">{selectedTrip.manifest?.lines.filter(line => line.order_id === stop.order_id).map(line => <div key={line.order_id}><Facts values={{ Order: line.order_ref, 'Expected': line.expected_quantity + ' units', 'Loaded': line.loaded_quantity + ' units' }} />{line.notes && <Alert tone="warning">{line.notes}</Alert>}</div>)}<p className="wp-muted">Quantities are shipment units. Store receiving records the actual intake; no product weights or signature capture are supplied by this driver API.</p></Panel>
+      {view === 'stop' && <Panel title="Stop Actions">
+        {selectedTrip.status === 'IN_PROGRESS' && stop.status === 'PENDING' && selectedTrip.stops.filter(item => item.sequence_number < stop.sequence_number).every(item => item.status === 'DELIVERED' || item.status === 'FAILED') ? <Button disabled={working} onClick={() => void queue({ kind: 'ARRIVE', trip_id: selectedTrip.id, stop_id: stop.id })}>Arrived at Stop</Button> : stop.status === 'PENDING' && <p className="wp-muted">Start the trip and complete earlier stops before recording arrival.</p>}
+        {stop.status === 'ARRIVED' && <Button onClick={() => setView('proof')}>Record Delivery</Button>}
+        {(stop.status === 'DELIVERED' || stop.status === 'FAILED') && <><p className="wp-muted">{pendingProof ? 'Saved locally; awaiting server synchronization.' : 'Server-confirmed ' + stop.status.toLowerCase() + ' outcome.'}</p><Button onClick={() => setView('sync')}>View Proof & Sync Status</Button></>}
+      </Panel>}
+      {view === 'proof' && stop.status === 'ARRIVED' && <Panel title="Recipient & Delivery Evidence"><div className="wp-form-grid">
+        <label>Receiver name<input className={field} required maxLength={120} value={receiver[stop.id] ?? stop.receiver_name ?? ''} onChange={event => { const value = event.target.value; setReceiver(state => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, selectedTrip.id, stop.id, value, notes[stop.id] ?? stop.delivery_notes ?? '') }} /></label>
+        <label className="wp-wide">Delivery notes or failure reason<textarea className={field} maxLength={1000} rows={3} value={notes[stop.id] ?? stop.delivery_notes ?? ''} onChange={event => { const value = event.target.value; setNotes(state => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, selectedTrip.id, stop.id, receiver[stop.id] ?? stop.receiver_name ?? '', value) }} /></label>
+        </div><Alert>Proof is saved on this device first, then synchronized with the server. Photo/signature uploads are not supported.</Alert><div className="wp-form-footer"><Button disabled={working || !(receiver[stop.id] ?? stop.receiver_name ?? '').trim()} onClick={() => { void queue({ kind: 'COMPLETE', trip_id: selectedTrip.id, stop_id: stop.id, outcome: 'DELIVERED', receiver_name: (receiver[stop.id] ?? stop.receiver_name ?? '').trim(), notes: notes[stop.id] ?? stop.delivery_notes ?? '' }).then(saved => { if (saved) setView('sync') }) }}>Save Delivered Proof</Button><Button variant="secondary" disabled={working || !(notes[stop.id] ?? stop.delivery_notes ?? '').trim()} onClick={() => { void queue({ kind: 'COMPLETE', trip_id: selectedTrip.id, stop_id: stop.id, outcome: 'FAILED', receiver_name: (receiver[stop.id] ?? stop.receiver_name ?? '').trim(), notes: notes[stop.id] ?? stop.delivery_notes ?? '' }).then(saved => { if (saved) setView('sync') }) }}>Record Failed Delivery</Button></div></Panel>}
+    </>}
   </section>
 }
 
@@ -290,15 +309,19 @@ function ShortfallWorkspace() {
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not publish the replacement plan.') }
     finally { setWorking(false) }
   }
-  const fieldClass = 'mt-2 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
-  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="shortfall-heading"><h2 id="shortfall-heading" className="text-xl font-bold">Loading exceptions</h2>
-    {items.length === 0 ? <p className="mt-3 text-sm text-slate-400">No open loading exceptions.</p> : <ul className="mt-3 space-y-3">{items.map((item) => <li key={item.id} className="rounded-lg border border-amber-900 bg-amber-950/30 p-4">
+  const fieldClass = 'mt-2 rounded border border-[#e5ebf2] bg-white px-3 py-2 text-[#10253d]'
+  return <section className="wp-operational" aria-label="Shortfall decisions"><PageHeading title="Shortfall Exception Resolution" description="Review loading discrepancies and record an authorized operational decision." />
+    {items.length === 0 ? <p className="mt-3 text-sm text-[#526477]">No open loading exceptions.</p> : <ul className="mt-3 space-y-3">{items.map((item) => <li key={item.id} className="rounded-lg border border-[#fde68a] bg-[#fffbeb] p-4">
       <p className="font-semibold">{item.order_ref} · {item.reason.toLowerCase()} · {item.quantity} units · {item.blocking ? 'dispatch hold' : 'nonblocking'}</p>
-      {item.status === 'RESOLUTION_PENDING' ? <button className="mt-3 rounded-lg border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => openReallocationPlan(item)}>Review replacement plan</button> : <div className="mt-3 flex flex-wrap gap-2"><select className={fieldClass} value={actions[item.id] ?? 'RELOAD_FOUND'} onChange={(event) => setActions((state) => ({ ...state, [item.id]: event.target.value }))}><option value="RELOAD_FOUND">Reload found</option><option value="PARTIAL_FULFILLMENT">Accept partial quantity</option><option value="SUBSTITUTE">Substitute</option><option value="DEFER">Defer order</option><option value="REALLOCATION">Move order to another trip</option></select>{actions[item.id] === 'REALLOCATION' && <select aria-label={`Target trip for ${item.order_ref}`} className={fieldClass} value={targetTrips[item.id] ?? ''} onChange={(event) => setTargetTrips((state) => ({ ...state, [item.id]: event.target.value }))}><option value="">Choose compatible trip</option>{publishedTrips.filter((trip) => trip.id !== item.trip_id).map((trip) => <option key={trip.id} value={trip.id}>{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</option>)}</select>}{actions[item.id] === 'PARTIAL_FULFILLMENT' && <input aria-label={`Accepted quantity for ${item.order_ref}`} className={fieldClass} min="0" max={item.quantity} type="number" placeholder="Accepted units" value={resolutionQuantities[item.id] ?? ''} onChange={(event) => setResolutionQuantities((state) => ({ ...state, [item.id]: event.target.value }))} />}{actions[item.id] === 'SUBSTITUTE' && <input aria-label={`Substitute for ${item.order_ref}`} className={fieldClass} placeholder="Substitute reference" value={substitutes[item.id] ?? ''} onChange={(event) => setSubstitutes((state) => ({ ...state, [item.id]: event.target.value }))} />}<input aria-label={`Resolution reason for ${item.order_ref}`} className={`${fieldClass} min-w-56 flex-1`} placeholder="Required reason" value={reasons[item.id] ?? ''} onChange={(event) => setReasons((state) => ({ ...state, [item.id]: event.target.value }))} /><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || !(reasons[item.id] ?? '').trim() || (actions[item.id] === 'REALLOCATION' && !targetTrips[item.id])} onClick={() => resolve(item)}>{actions[item.id] === 'REALLOCATION' ? 'Build replacement plan' : 'Resolve and create V2'}</button></div>}
-    </li>)}</ul>}{candidatePlan && <section className="mt-5 rounded-xl border border-cyan-800 bg-slate-950 p-4" aria-label="Replacement plan review"><h3 className="font-bold">Replacement plan V{candidatePlan.version_number} · {candidatePlan.status}</h3><p className="mt-1 text-sm text-slate-400">The planner checked vehicle capacity, fuel, route grouping, and delivery windows. Review the updated trips before publishing.</p><div className="mt-3 space-y-2">{candidatePlan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-3 text-sm" key={trip.id}><p className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</p><p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg · {trip.metrics.volume_m3} m³ · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p><ol className="mt-2 list-inside list-decimal">{trip.stops.map((stop) => <li key={stop.order_id}>{stop.order_ref} · {stop.outlet_id}</li>)}</ol></article>)}</div><div className="mt-4 flex gap-2"><button className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || candidatePlan.status !== 'DRAFT' || candidatePlan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishReallocation}>{working ? 'Publishing…' : 'Publish replacement plan'}</button><button className="rounded-lg border border-slate-700 px-4 py-2" disabled={working} onClick={() => setCandidatePlan(null)}>Close review</button></div></section>}{error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}</section>
+      {item.status === 'RESOLUTION_PENDING' ? <button className="mt-3 rounded-lg border border-[#d0e2ff] px-3 py-2 text-sm" disabled={working} onClick={() => openReallocationPlan(item)}>Review replacement plan</button> : <div className="mt-3 flex flex-wrap gap-2"><select aria-label={`Resolution for ${item.order_ref}`} className={fieldClass} value={actions[item.id] ?? 'RELOAD_FOUND'} onChange={(event) => setActions((state) => ({ ...state, [item.id]: event.target.value }))}><option value="RELOAD_FOUND">Reload found</option><option value="PARTIAL_FULFILLMENT">Accept partial quantity</option><option value="SUBSTITUTE">Substitute</option><option value="DEFER">Defer order</option><option value="REALLOCATION">Move order to another trip</option></select>{actions[item.id] === 'REALLOCATION' && <select aria-label={`Target trip for ${item.order_ref}`} className={fieldClass} value={targetTrips[item.id] ?? ''} onChange={(event) => setTargetTrips((state) => ({ ...state, [item.id]: event.target.value }))}><option value="">Choose compatible trip</option>{publishedTrips.filter((trip) => trip.id !== item.trip_id).map((trip) => <option key={trip.id} value={trip.id}>{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</option>)}</select>}{actions[item.id] === 'PARTIAL_FULFILLMENT' && <input aria-label={`Accepted quantity for ${item.order_ref}`} className={fieldClass} min="0" max={item.quantity} type="number" placeholder="Accepted units" value={resolutionQuantities[item.id] ?? ''} onChange={(event) => setResolutionQuantities((state) => ({ ...state, [item.id]: event.target.value }))} />}{actions[item.id] === 'SUBSTITUTE' && <input aria-label={`Substitute for ${item.order_ref}`} className={fieldClass} placeholder="Substitute reference" value={substitutes[item.id] ?? ''} onChange={(event) => setSubstitutes((state) => ({ ...state, [item.id]: event.target.value }))} />}<input aria-label={`Resolution reason for ${item.order_ref}`} className={`${fieldClass} min-w-56 flex-1`} placeholder="Required reason" value={reasons[item.id] ?? ''} onChange={(event) => setReasons((state) => ({ ...state, [item.id]: event.target.value }))} /><button className="rounded-lg bg-[#1765c1] text-white px-4 py-2 font-bold  disabled:opacity-50" disabled={working || !(reasons[item.id] ?? '').trim() || (actions[item.id] === 'REALLOCATION' && !targetTrips[item.id])} onClick={() => resolve(item)}>{actions[item.id] === 'REALLOCATION' ? 'Build replacement plan' : 'Resolve and create V2'}</button></div>}
+    </li>)}</ul>}{candidatePlan && <section className="mt-5 rounded-xl border border-[#d0e2ff] bg-white p-4" aria-label="Replacement plan review"><h3 className="font-bold">Replacement plan V{candidatePlan.version_number} · {candidatePlan.status}</h3><p className="mt-1 text-sm text-[#526477]">The planner checked vehicle capacity, fuel, route grouping, and delivery windows. Review the updated trips before publishing.</p><div className="mt-3 space-y-2">{candidatePlan.trips.map((trip) => <article className="rounded-lg border border-[#e5ebf2] p-3 text-sm" key={trip.id}><p className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</p><p className="mt-1 text-xs text-[#526477]">{trip.metrics.weight_kg} kg · {trip.metrics.volume_m3} m³ · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p><ol className="mt-2 list-inside list-decimal">{trip.stops.map((stop) => <li key={stop.order_id}>{stop.order_ref} · {stop.outlet_id}</li>)}</ol></article>)}</div><div className="mt-4 flex gap-2"><button className="rounded-lg bg-[#1765c1] text-white px-4 py-2 font-bold  disabled:opacity-50" disabled={working || candidatePlan.status !== 'DRAFT' || candidatePlan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishReallocation}>{working ? 'Publishing…' : 'Publish replacement plan'}</button><button className="rounded-lg border border-[#e5ebf2] px-4 py-2" disabled={working} onClick={() => setCandidatePlan(null)}>Close review</button></div></section>}{error && <p role="alert" className="mt-3 text-sm text-[#9f1239]">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-[#147d64]">{notice}</p>}</section>
 }
 
-function DispatcherWorkspace() {
+export function DispatcherWorkspace() {
+  const heading = useRef<HTMLElement>(null)
+  const [stage, setStage] = useState(0)
+  useEffect(() => { heading.current?.querySelector('h1')?.focus() }, [stage])
+  const steps = ['Confirmed Orders', 'Planning & Allocation', 'Deferral Review', 'Confirm Assignment']
   const [drivers, setDrivers] = useState<Array<{ id: string; display_name: string; email: string; depot_code: string | null }>>([])
   const [driverSelections, setDriverSelections] = useState<Record<string, string>>({})
   const [filters, setFilters] = useState<DispatcherFilters>({})
@@ -313,6 +336,13 @@ function DispatcherWorkspace() {
   const [notice, setNotice] = useState('')
 
   useEffect(() => { listDispatcherDrivers().then(setDrivers).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load drivers.')) }, [])
+  useEffect(() => {
+    let active = true
+    listDispatcherPlans().then(items => {
+      if (active) setAvailableDates(current => [...new Set([...current, ...items.map(item => item.planning_date)])].sort())
+    }).catch((cause: unknown) => { if (active) setError(cause instanceof ApiError ? cause.message : 'Could not load plan dates.') })
+    return () => { active = false }
+  }, [])
 
   async function assignDriver(tripId: string, driverId: string) {
     if (!driverId) return
@@ -373,6 +403,7 @@ function DispatcherWorkspace() {
     try {
       const candidate = await createDispatcherPlan(filters.planning_date, crypto.randomUUID())
       setPlan(candidate)
+      setStage(1)
       setSavedPlans((current) => [candidate, ...current.filter((item) => item.id !== candidate.id)])
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : 'Could not generate a plan candidate.')
@@ -403,59 +434,62 @@ function DispatcherWorkspace() {
     ...availableDates,
     ...savedPlans.map((saved) => saved.planning_date),
   ])].sort()
-  const filterClass = 'mt-2 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
-  const inputClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
+  const filterClass = 'mt-2 block w-full rounded-lg border border-[#e5ebf2] bg-white px-3 py-2 text-[#10253d]'
+  const inputClass = 'rounded-lg border border-[#e5ebf2] bg-white px-3 py-2 text-[#10253d]'
 
   return (
-    <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="dispatcher-heading">
-      <h2 id="dispatcher-heading" className="text-xl font-bold">Dispatcher plan review</h2>
-      <p className="mt-2 text-sm text-slate-400">Filter confirmed orders, generate a draft candidate, review its trips and deferrals, then publish a version.</p>
+    <section ref={heading} className="wp-operational wp-dispatcher" aria-label="Dispatcher planning">
+      <PageHeading title={steps[stage]} description="Review eligible orders, generate a compliant plan, then publish its manifest." />
+      <WorkflowSteps steps={steps} active={stage} onSelect={setStage} />
+      <WorkflowStats values={{ 'Confirmed orders': orders.length, 'Combined weight': orders.reduce((sum, order) => sum + order.weight_kg, 0).toFixed(1) + ' kg', 'Combined volume': orders.reduce((sum, order) => sum + order.volume_m3, 0).toFixed(2) + ' m³', 'Van-only outlets': new Set(orders.filter(order => order.parking_constraint === 'VAN_ONLY').map(order => order.outlet_id)).size }} />
+      <details className="wp-panel wp-filter-panel" open={stage === 0}><summary>Order Queue Filters</summary>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <label className="text-sm text-slate-200">Delivery date
+        <label className="text-sm text-[#10253d]">Delivery date
           <select className={filterClass} onChange={(event) => updateFilter('planning_date', event.target.value)} value={filters.planning_date ?? ''}>
             <option value="">All dates</option>
             {dateOptions.map((date) => <option key={date} value={date}>{date}</option>)}
           </select>
         </label>
-        <label className="text-sm text-slate-200">Depot
+        <label className="text-sm text-[#10253d]">Depot
           <select className={filterClass} onChange={(event) => updateFilter('depot', event.target.value)} value={filters.depot ?? ''}>
             <option value="">All depots</option><option>Peliyagoda</option><option>Kandy</option>
           </select>
         </label>
-        <label className="text-sm text-slate-200">Brand
+        <label className="text-sm text-[#10253d]">Brand
           <select className={filterClass} onChange={(event) => updateFilter('brand', event.target.value)} value={filters.brand ?? ''}>
             <option value="">All brands</option><option>Fresh</option><option>Style</option><option>Tech</option>
           </select>
         </label>
-        <label className="text-sm text-slate-200">District
+        <label className="text-sm text-[#10253d]">District
           <input className={filterClass} onChange={(event) => updateFilter('district', event.target.value)} placeholder="Any district" value={filters.district ?? ''} />
         </label>
-        <label className="text-sm text-slate-200">Temperature
+        <label className="text-sm text-[#10253d]">Temperature
           <select className={filterClass} onChange={(event) => updateFilter('temperature', event.target.value as DispatcherFilters['temperature'])} value={filters.temperature ?? ''}>
             <option value="">Any temperature</option><option value="AMBIENT">Ambient</option><option value="CHILLED">Chilled</option><option value="FROZEN">Frozen</option>
           </select>
         </label>
-        <label className="text-sm text-slate-200">Access rule
+        <label className="text-sm text-[#10253d]">Access rule
           <select className={filterClass} onChange={(event) => updateFilter('access', event.target.value)} value={filters.access ?? ''}>
             <option value="">Any access rule</option><option value="VAN_ONLY">Van only</option><option value="NONE">No restriction</option>
           </select>
         </label>
-        <label className="text-sm text-slate-200">Delivery window
+        <label className="text-sm text-[#10253d]">Delivery window
           <select className={filterClass} onChange={(event) => updateFilter('delivery_window', event.target.value as DispatcherFilters['delivery_window'])} value={filters.delivery_window ?? ''}>
             <option value="">Any window</option><option value="restricted">Has receiving window</option><option value="none">No receiving window</option>
           </select>
         </label>
-        <label className="text-sm text-slate-200">Prior deferral
+        <label className="text-sm text-[#10253d]">Prior deferral
           <select className={filterClass} onChange={(event) => updateFilter('prior_deferral', event.target.value as DispatcherFilters['prior_deferral'])} value={filters.prior_deferral ?? ''}>
             <option value="">Any</option><option value="true">Previously deferred</option><option value="false">Not deferred before</option>
           </select>
         </label>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-        <p className="text-sm text-slate-300">{loading ? 'Loading orders…' : `${orders.length} confirmed order${orders.length === 1 ? '' : 's'} in this queue`}</p>
-        <button className="rounded-lg bg-cyan-400 px-4 py-2.5 font-bold text-slate-950 disabled:opacity-50" disabled={working || loading || !filters.planning_date || orders.length === 0} onClick={makeCandidate} type="button">
+      </details>
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e5ebf2] bg-[#f8fafc] p-4">
+        <p className="text-sm text-[#526477]">{loading ? 'Loading orders…' : `${orders.length} confirmed order${orders.length === 1 ? '' : 's'} in this queue`}</p>
+        <button className="rounded-lg bg-[#1765c1] text-white px-4 py-2.5 font-bold  disabled:opacity-50" disabled={working || loading || !filters.planning_date || orders.length === 0} onClick={makeCandidate} type="button">
           {working && !plan ? 'Building candidate…' : 'Generate candidate plan'}
         </button>
       </div>
@@ -463,52 +497,52 @@ function DispatcherWorkspace() {
       {savedPlans.length > 0 && <div className="mt-5">
         <h3 className="font-semibold">Saved plan versions</h3>
         <ul className="mt-2 flex flex-wrap gap-2">{savedPlans.map((saved) => <li key={saved.id}>
-          <button className="rounded-lg border border-slate-700 px-3 py-2 text-left text-sm hover:border-cyan-500" onClick={() => { setError(''); getDispatcherPlan(saved.id).then(setPlan).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not open this plan version.')) }} type="button">
+          <button className="rounded-lg border border-[#e5ebf2] px-3 py-2 text-left text-sm hover:border-cyan-500" onClick={() => { setError(''); getDispatcherPlan(saved.id).then(item => { setPlan(item); setStage(1) }).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not open this plan version.')) }} type="button">
             V{saved.version_number} · {saved.status} · {new Date(saved.created_at).toLocaleString()}
           </button>
         </li>)}</ul>
       </div>}
 
-      {!loading && orders.length === 0 && <p className="mt-4 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">No confirmed orders match these filters.</p>}
-      {orders.length > 0 && <ul className="mt-4 divide-y divide-slate-800 rounded-lg border border-slate-800">
-        {orders.map((order) => <li className="flex flex-wrap justify-between gap-2 p-3 text-sm" key={order.id}>
-          <span><strong>{order.reference}</strong> · {order.outlet_id} · {order.brand} / {order.district}{order.window_open_time && order.window_close_time ? ` · ${order.window_open_time}–${order.window_close_time}` : ''}</span>
-          <span className="text-slate-400">{order.requested_delivery_date} · {order.temperature_requirement.toLowerCase()} · {order.weight_kg} kg / {order.volume_m3} m³</span>
-        </li>)}
-      </ul>}
+      {!loading && orders.length === 0 && <p className="mt-4 rounded-lg bg-[#f8fafc] p-4 text-sm text-[#526477]">No confirmed orders match these filters.</p>}
+      {orders.length > 0 && stage === 0 && <Panel className="wp-table-panel"><div className="wp-table-heading"><h2>Orders Ready for Planning</h2><p>Keep temperature requirements separate; server eligibility rules remain authoritative.</p></div><div className="wp-table-scroll" role="region" aria-label="Confirmed orders table" tabIndex={0}><table className="wp-table"><caption className="sr-only">Confirmed orders ready for planning</caption><thead><tr><th scope="col">Order</th><th scope="col">Outlet</th><th scope="col">Temperature</th><th scope="col">Load</th><th scope="col">Window</th><th scope="col">Status</th></tr></thead><tbody>{orders.map(order => <tr key={order.id}><th scope="row"><code>{order.reference}</code></th><td>{order.outlet_id}<small>{order.brand} · {order.district}</small></td><td>{order.temperature_requirement}</td><td>{order.weight_kg} kg<small>{order.volume_m3} m³ · {order.units} units</small></td><td>{order.window_open_time && order.window_close_time ? order.window_open_time + '–' + order.window_close_time : 'No restricted window'}</td><td><StatusBadge status={order.status} /></td></tr>)}</tbody></table></div></Panel>}
+      {stage > 0 && !plan && <Alert>Select a saved plan or generate a candidate to review this step.</Alert>}
+      {stage === 2 && plan && <div className="wp-two-column"><Panel title="Authoritative Deferral Decisions"><p className="wp-muted">Reasons below are recorded by the planner. Manual deferral drafts and notification delivery are not supported by the current API.</p><div className="wp-shipment-list">{plan.orders.filter(item => item.decision === 'deferred').map(item => <article key={item.order_id}><strong>{item.order_ref}</strong><Facts values={{ Outlet: item.outlet_id ?? 'Not supplied', Reason: item.reason?.replace(/_/g, ' ') ?? 'Not supplied' }} />{item.notes && <p>{item.notes}</p>}</article>)}</div>{!plan.orders.some(item => item.decision === 'deferred') && <p className="wp-muted">No deferred orders in this candidate.</p>}</Panel><Panel title="Customer Impact & Recovery"><p className="wp-muted">No stock forecast, next delivery promise or messaging transmission is provided by the current plan API. Publish records the served/deferred decisions against each order.</p><div className="wp-form-footer"><Button onClick={() => setStage(3)}>Review Assignment</Button></div></Panel></div>}
 
-      {plan && <section className="mt-8 rounded-xl border border-cyan-900 bg-slate-950/60 p-5" aria-labelledby="candidate-heading">
+      {plan && stage !== 0 && stage !== 2 && <section className="mt-8 rounded-xl border border-[#d0e2ff] bg-white p-5" aria-labelledby="candidate-heading">
+        {plan.status === 'PUBLISHED' && <Alert>Metrics describe this original published allocation, not later loading revisions. Check Loading Decisions and the loader's current manifest for revised quantities.</Alert>}
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div><p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Plan V{plan.version_number} · {plan.status}</p><h3 id="candidate-heading" className="mt-1 text-xl font-bold">Candidate review · {plan.planning_date}</h3></div>
+          <div><p className="text-xs font-semibold uppercase tracking-widest text-[#1765c1]">Plan V{plan.version_number} · {plan.status}</p><h3 id="candidate-heading" className="mt-1 text-xl font-bold">{stage === 3 ? 'Confirm Assignment & Release Manifest' : 'Planning and Allocation'} · {plan.planning_date}</h3></div>
           <div className="flex gap-4 text-sm"><span>{plan.orders.filter((item) => item.decision === 'served').length} served</span><span>{plan.orders.filter((item) => item.decision === 'deferred').length} deferred</span><span>{plan.trips.length} trips</span></div>
         </div>
-        {plan.diagnostics.length > 0 && <ul className="mt-4 list-disc pl-5 text-sm text-amber-200">{plan.diagnostics.map((item) => <li key={item}>{item.replace(/_/g, ' ')}</li>)}</ul>}
+        {plan.diagnostics.length > 0 && <ul className="mt-4 list-disc pl-5 text-sm text-[#92400e]">{plan.diagnostics.map((item) => <li key={item}>{item.replace(/_/g, ' ')}</li>)}</ul>}
         <div className="mt-5 space-y-4">
-          {plan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-4" key={trip.id}>
+          {plan.trips.map((trip) => <article className="rounded-lg border border-[#e5ebf2] p-4" key={trip.id}>
             <h4 className="font-semibold">{trip.brand} · {trip.district} · {trip.vehicle_id} · Trip {trip.trip_number}</h4>
-            <p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg ({trip.metrics.weight_utilization_pct}% capacity) · {trip.metrics.volume_m3} m³ ({trip.metrics.volume_utilization_pct}% capacity) · {trip.metrics.distance_km} km · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p>
-            {plan.status === 'PUBLISHED' && <div className="mt-3 flex flex-wrap items-end gap-2"><label className="text-xs text-slate-300">Driver for {trip.depot_code}<select className={`${inputClass} mt-1 block`} value={driverSelections[trip.id] ?? trip.assigned_driver_id ?? ''} onChange={(event) => setDriverSelections((state) => ({ ...state, [trip.id]: event.target.value }))}><option value="">Choose driver</option>{drivers.filter((driver) => driver.depot_code === trip.depot_code).map((driver) => <option key={driver.id} value={driver.id}>{driver.display_name}</option>)}</select></label><button className="rounded-lg border border-cyan-700 px-3 py-2 text-sm disabled:opacity-50" disabled={working || !(driverSelections[trip.id] ?? trip.assigned_driver_id)} onClick={() => assignDriver(trip.id, driverSelections[trip.id] ?? trip.assigned_driver_id ?? '')}>{trip.assigned_driver_name ? `Assigned: ${trip.assigned_driver_name} · change` : 'Assign driver'}</button></div>}
-            <ol className="mt-3 space-y-2 border-l border-slate-700 pl-4 text-sm">{trip.stops.map((stop) => <li key={stop.order_id}><strong>{stop.sequence_number}. {stop.order_ref}</strong> · {stop.outlet_id} · ETA {stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) : 'not set'} · {stop.planned_service_minutes} min service</li>)}</ol>
+            <p className="mt-1 text-xs text-[#526477]">{trip.metrics.weight_kg} kg ({trip.metrics.weight_utilization_pct}% capacity) · {trip.metrics.volume_m3} m³ ({trip.metrics.volume_utilization_pct}% capacity) · {trip.metrics.distance_km} km · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p>
+            {plan.status === 'PUBLISHED' && <div className="mt-3 flex flex-wrap items-end gap-2"><label className="text-xs text-[#526477]">Driver for {trip.depot_code}<select className={`${inputClass} mt-1 block`} value={driverSelections[trip.id] ?? trip.assigned_driver_id ?? ''} onChange={(event) => setDriverSelections((state) => ({ ...state, [trip.id]: event.target.value }))}><option value="">Choose driver</option>{drivers.filter((driver) => driver.depot_code === trip.depot_code).map((driver) => <option key={driver.id} value={driver.id}>{driver.display_name}</option>)}</select></label><button className="rounded-lg border border-[#d0e2ff] px-3 py-2 text-sm disabled:opacity-50" disabled={working || !(driverSelections[trip.id] ?? trip.assigned_driver_id)} onClick={() => assignDriver(trip.id, driverSelections[trip.id] ?? trip.assigned_driver_id ?? '')}>{trip.assigned_driver_name ? `Assigned: ${trip.assigned_driver_name} · change` : 'Assign driver'}</button></div>}
+            <div className="wp-utilization"><label>Weight utilization · {trip.metrics.weight_utilization_pct}%<progress max={100} value={Number(trip.metrics.weight_utilization_pct)} /></label><label>Volume utilization · {trip.metrics.volume_utilization_pct}%<progress max={100} value={Number(trip.metrics.volume_utilization_pct)} /></label></div>
+            <ol className="mt-3 space-y-2 border-l border-[#e5ebf2] pl-4 text-sm">{trip.stops.map((stop) => <li key={stop.order_id}><strong>{stop.sequence_number}. {stop.order_ref}</strong> · {stop.outlet_id} · ETA {stop.planned_arrival ? new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' }) : 'not set'} · {stop.planned_service_minutes} min service</li>)}</ol>
           </article>)}
         </div>
-        <div className="mt-5 rounded-lg bg-slate-900 p-4">
+        <div className="mt-5 rounded-lg bg-[#f8fafc] p-4">
           <h4 className="font-semibold">Order decisions</h4>
           <ul className="mt-2 space-y-2 text-sm">{plan.orders.map((item) => <li key={item.order_id} className="flex flex-wrap justify-between gap-2">
             <span>{item.order_ref} · {item.outlet_id ?? '—'}</span>
-            <span className={item.decision === 'deferred' ? 'text-amber-200' : 'text-emerald-200'}>{item.decision}{item.vehicle_id ? ` · ${item.vehicle_id} / trip ${item.trip_number}` : ''}{item.reason ? ` · ${item.reason.replace(/_/g, ' ')}` : ''}</span>
+            <span className={item.decision === 'deferred' ? 'text-[#92400e]' : 'text-[#147d64]'}>{item.decision}{item.vehicle_id ? ` · ${item.vehicle_id} / trip ${item.trip_number}` : ''}{item.reason ? ` · ${item.reason.replace(/_/g, ' ')}` : ''}</span>
           </li>)}</ul>
         </div>
-        {plan.status === 'DRAFT' && <div className="mt-5 flex flex-wrap items-end gap-3">
-          <label className="min-w-64 flex-1 text-sm text-slate-200">Publication note (optional)
+        {plan.status === 'DRAFT' && stage === 3 && <div className="mt-5 flex flex-wrap items-end gap-3">
+          <label className="min-w-64 flex-1 text-sm text-[#10253d]">Publication note (optional)
             <input className={`${inputClass} mt-2 block w-full`} maxLength={500} onChange={(event) => setReason(event.target.value)} value={reason} />
           </label>
-          <button className="rounded-lg bg-emerald-400 px-5 py-2.5 font-bold text-slate-950 disabled:opacity-50" disabled={working || plan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishPlan} type="button">{working ? 'Publishing…' : 'Publish plan'}</button>
+          <button className="rounded-lg bg-[#1765c1] text-white px-5 py-2.5 font-bold  disabled:opacity-50" disabled={working || plan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishPlan} type="button">{working ? 'Publishing…' : 'Confirm & Publish Manifest'}</button>
         </div>}
-        {plan.status === 'PUBLISHED' && <p className="mt-5 rounded-lg bg-emerald-950 p-3 text-sm text-emerald-200">Published {plan.published_at ? new Date(plan.published_at).toLocaleString() : ''}. The published version is locked.</p>}
+        {plan.status === 'DRAFT' && stage === 1 && <div className="wp-form-footer"><Button variant="secondary" onClick={() => setStage(2)}>Review Deferrals</Button><Button onClick={() => setStage(3)}>Continue to Assignment Review</Button></div>}
+        {plan.status === 'PUBLISHED' && <p className="mt-5 rounded-lg bg-[#ebf8f4] p-3 text-sm text-[#147d64]">Published {plan.published_at ? new Date(plan.published_at).toLocaleString() : ''}. The published version is locked.</p>}
       </section>}
 
-      {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
-      {notice && <p role="status" className="mt-4 text-sm text-emerald-300">{notice}</p>}
+      {error && <p role="alert" className="mt-4 text-sm text-[#9f1239]">{error}</p>}
+      {notice && <p role="status" className="mt-4 text-sm text-[#147d64]">{notice}</p>}
     </section>
   )
 }
@@ -583,7 +617,7 @@ function App() {
       {currentPage === 'orders' ? <StoreWorkspace key={user.id} user={user} /> :
         currentPage === 'deliveries' ? <StoreWorkspace key={user.id + '-deliveries'} user={user} deliveries /> :
         currentPage === 'account' ? <><PageHeading title="Store Account" description="Your authenticated outlet scope. Profile editing and preferences are not supported yet." /><Panel title="Account Context"><Facts values={{ 'Name': user.display_name, 'Email': user.email, 'Role': user.role, 'Outlet': user.outlet_id ?? 'Not assigned' }} /></Panel></> :
-        <div className="wp-legacy-workspace">{currentPage === 'planning' ? <DispatcherWorkspace /> : currentPage === 'exceptions' ? <ShortfallWorkspace /> : currentPage === 'issues' ? <DeliveryIssues /> : currentPage === 'loading' ? <LoaderWorkspace /> : <DriverWorkspace />}</div>}
+        <div className="wp-operational-root">{currentPage === 'planning' ? <DispatcherWorkspace /> : currentPage === 'exceptions' ? <ShortfallWorkspace /> : currentPage === 'issues' ? <DeliveryIssues /> : currentPage === 'loading' ? <LoaderWorkspace /> : <DriverWorkspace />}</div>}
       {error && <Alert tone="error">{error}</Alert>}
     </AppShell>
   }

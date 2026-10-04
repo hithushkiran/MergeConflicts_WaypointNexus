@@ -13,7 +13,7 @@ export function PageHeading({ title, description, actions }: { title: string; de
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  const tone = ['CONFIRMED', 'RECEIVED', 'RESOLVED', 'READY'].includes(status) ? 'success' : ['DEFERRED', 'PARTIAL', 'DISPUTED', 'DISPATCH_HOLD', 'OPEN'].includes(status) ? 'warning' : 'info'
+  const tone = ['CONFIRMED', 'RECEIVED', 'RESOLVED', 'READY', 'LOADED', 'COMPLETED', 'DELIVERED', 'CONNECTED'].includes(status) ? 'success' : ['DEFERRED', 'PARTIAL', 'DISPUTED', 'DISPATCH_HOLD', 'OPEN', 'PENDING_SYNC', 'OFFLINE', 'CONFLICT', 'FAILED'].includes(status) ? 'warning' : 'info'
   return <span className={`wp-badge wp-badge-${tone}`}>{status.replace(/_/g, ' ')}</span>
 }
 

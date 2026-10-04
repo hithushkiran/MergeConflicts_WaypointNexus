@@ -14,7 +14,7 @@ export default function AppShell({ user, page, onNavigate, onSignOut, children }
   }, [page])
   return <div className={`wp-shell ${user.role === 'DRIVER' ? 'wp-driver-shell' : ''}`}>
     <a className="wp-skip" href="#workspace">Skip to workspace</a>
-    <aside className={`wp-sidebar ${menuOpen ? 'wp-menu-open' : ''}`}>
+    <aside className={`wp-sidebar ${menuOpen ? 'wp-menu-open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') setMenuOpen(false) }}>
       <div className="wp-brand"><span className="wp-emblem"><img src="/figma-assets/logo.svg" alt="" /></span><div><strong>WAYPOINT</strong><small>DELIVERY OPERATIONS</small></div></div>
       <nav aria-label={`${roleNames[user.role]} navigation`}>{entries.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => { onNavigate(item.id); setMenuOpen(false) }}>
         {item.icon && <img src={`/figma-assets/${item.icon}.svg`} alt="" />}{item.label}
