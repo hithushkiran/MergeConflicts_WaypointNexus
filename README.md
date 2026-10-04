@@ -64,7 +64,7 @@ alembic upgrade head
 python -m app.seed
 ```
 
-The idempotent seed imports 4 roles, Peliyagoda/Kandy depots, 120 outlets, 60 vehicles, and development users: `store.manager@waypoint.local`, `dispatcher@waypoint.local`, `loader@waypoint.local`, and `driver@waypoint.local`. No official calendar is currently available. Reset with `docker compose down -v` (warning: deletes local DB data), then `docker compose up --build`.
+The idempotent seed imports 4 roles, depots, outlets, vehicles, and development users: `store.manager@waypoint.local`, `dispatcher@waypoint.local`, `loader@waypoint.local`, and `driver@waypoint.local`. When official CSVs are available, it imports the official 120 outlets and 60 vehicles. In development only, Compose uses the clearly synthetic, packaged `backend/demo-data/` fixture when the official files are absent; its store account is scoped to `DEMO-OUT001`. These fixtures are not official competition data. No official calendar is currently available. Reset with `docker compose down -v` (warning: deletes local DB data), then `docker compose up --build`.
 
 When `APP_ENV=development`, seeded users receive a password hash from `DEV_SEED_PASSWORD` only if they do not already have one. Compose supplies `waypoint-local-demo` as a local-only default; replace it in `.env` before sharing a development environment. Production seeding does not set this shared development password.
 
@@ -114,4 +114,4 @@ Use `<jira-key>/<short-kebab-case-description>`, for example `FND-01/initial-mon
 
 FND-02 adds a Docker Compose environment with the web, API, and PostgreSQL services. The API exposes `GET /health` for liveness and `GET /ready` for database readiness.
 
-Database schema migrations and deterministic seed data arrive in FND-03. Authentication is available through the versioned endpoints documented in [docs/api-contracts.md](docs/api-contracts.md); order workflows and the route-planning solver are not implemented yet.
+Database schema migrations and deterministic seed data arrive in FND-03. Authentication and outlet-scoped store order workflows are available through the versioned endpoints documented in [docs/api-contracts.md](docs/api-contracts.md); planning and delivery workflows are not implemented yet.

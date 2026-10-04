@@ -1,0 +1,3 @@
+vehicle_id,type,temp,weight_cap_kg,volume_cap_m3,fuel_type,km_per_l,weekly_fuel_quota_l,depot
+DEMO-VEH001,VAN,AMBIENT,1500,12,DIESEL,8,250,Peliyagoda
+DEMO-VEH002,TRUCK,CHILLED,4000,28,DIESEL,5,400,Kandy

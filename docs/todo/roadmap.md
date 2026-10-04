@@ -317,7 +317,7 @@ Order persists in database
 Order appears in dashboard
 ```
 
-Run this from a **fresh seeded environment**. The automated SQLite integration tests cover create/persist/list, outlet scope, validation, and idempotent retry. The Compose end-to-end seed gate remains pending until the official ignored `local-data/outlets.csv` and `local-data/vehicles.csv` files are mounted.
+Run this from a **fresh seeded environment**. Automated SQLite tests cover create/persist/list, outlet scope, validation, and idempotent retry. The Compose development seed also supports the clearly synthetic packaged dataset when official ignored files are absent. Live Compose verification completed: demo store login, order creation, and subsequent list retrieval all succeeded. Official data remains the source of truth whenever both official files are mounted.
 
 If it fails, fix it before continuing.
 
