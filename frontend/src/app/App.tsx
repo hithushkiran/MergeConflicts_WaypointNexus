@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import StoreReceipts from './StoreReceipts'
+import DeliveryIssues from './DeliveryIssues'
 
 import {
   ApiError,
@@ -196,6 +198,7 @@ function StoreOrders() {
           </ul>
         )}
       </div>
+      <StoreReceipts onReceived={() => { void refreshOrders().catch(() => setError('Could not refresh order status. Refresh your workspace.')) }} />
     </section>
   )
 }
@@ -372,6 +375,8 @@ function DriverWorkspace() {
       <ol className="mt-4 space-y-3">{trip.stops.map((stop, stopIndex) => {
         const previousStopsDone = trip.stops.slice(0, stopIndex).every((previous) => previous.status === 'DELIVERED' || previous.status === 'FAILED')
         const localPending = outbox.some((entry) => entry.command.trip_id === trip.id && 'stop_id' in entry.command && entry.command.stop_id === stop.id)
+        const savedReceiver = receiver[stop.id] ?? stop.receiver_name ?? ''
+        const savedNotes = notes[stop.id] ?? stop.delivery_notes ?? ''
         return <li key={stop.id} className="rounded-lg bg-slate-950 p-3">
         <p className="font-semibold">{stop.sequence_number}. {stop.order_ref} · {stop.outlet_id}</p>
         <p className="mt-1 text-sm text-slate-300">{stop.district}{stop.window_open_time && stop.window_close_time ? ` · ${stop.window_open_time}–${stop.window_close_time}` : ''}{stop.planned_arrival ? ` · ETA ${new Date(stop.planned_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Colombo' })}` : ''}</p>
@@ -381,7 +386,7 @@ function DriverWorkspace() {
         {trip.status === 'IN_PROGRESS' && stop.status === 'ARRIVED' && <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <label className="text-xs text-slate-300">Receiver name<input className={field} value={receiver[stop.id] ?? stop.receiver_name ?? ''} onChange={(event) => { const value = event.target.value; setReceiver((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, value, notes[stop.id] ?? stop.delivery_notes ?? '') }} /></label>
           <label className="text-xs text-slate-300">Delivery notes or failure reason<input className={field} value={notes[stop.id] ?? stop.delivery_notes ?? ''} onChange={(event) => { const value = event.target.value; setNotes((state) => ({ ...state, [stop.id]: value })); if (userId) void saveDeliveryDraft(userId, trip.id, stop.id, receiver[stop.id] ?? stop.receiver_name ?? '', value) }} /></label>
-          <div className="flex gap-2 sm:col-span-2"><button className="rounded bg-emerald-400 px-3 py-2 font-semibold text-slate-950" disabled={working || !receiver[stop.id]?.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'DELIVERED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' })}>Delivered</button><button className="rounded border border-rose-700 px-3 py-2" disabled={working || !notes[stop.id]?.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'FAILED', receiver_name: receiver[stop.id] ?? '', notes: notes[stop.id] ?? '' })}>Failed delivery</button></div>
+          <div className="flex gap-2 sm:col-span-2"><button className="rounded bg-emerald-400 px-3 py-2 font-semibold text-slate-950" disabled={working || !savedReceiver.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'DELIVERED', receiver_name: savedReceiver, notes: savedNotes })}>Delivered</button><button className="rounded border border-rose-700 px-3 py-2" disabled={working || !savedNotes.trim()} onClick={() => void queue({ kind: 'COMPLETE', trip_id: trip.id, stop_id: stop.id, outcome: 'FAILED', receiver_name: savedReceiver, notes: savedNotes })}>Failed delivery</button></div>
         </div>}
       </li>})}</ol>
     </article>)}</div>}
@@ -755,7 +760,7 @@ function App() {
               <dd className="mt-1 font-semibold">{scope}</dd>
             </div>
           </dl>
-          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /><DeliveryIssues /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
           {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
         </section>
       </main>

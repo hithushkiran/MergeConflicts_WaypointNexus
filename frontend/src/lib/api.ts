@@ -49,6 +49,67 @@ export interface OrderEligibility {
   explanation: string
 }
 
+export interface StoreReceipt {
+  id: string; order_id: string; trip_stop_id: string | null
+  status: 'CONFIRMED' | 'PARTIAL' | 'DISPUTED'
+  receiver_name: string | null; received_quantity: number | null
+  ordered_quantity: number | null; dispatched_quantity: number | null
+  confirmed_by_id: string | null; confirmed_at: string | null; notes: string | null
+  manifest_version_id: string | null
+}
+
+export type DeliveryIssueType = 'MISSING_QUANTITY' | 'DAMAGED' | 'WRONG_ITEM' | 'OTHER'
+export interface DeliveryIssue {
+  id: string; receipt_id: string | null; order_id: string; issue_type: DeliveryIssueType
+  status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED'; affected_quantity: number | null
+  notes: string | null; created_at: string; reported_by_id: string | null
+  resolution_notes: string | null; resolved_at: string | null; resolved_by_id: string | null
+}
+
+export interface StoreDelivery {
+  order_id: string; order_ref: string; order_status: string; outlet_id: string
+  brand: string; district: string; depot_code: string; temperature_requirement: TemperatureRequirement
+  ordered_quantity: number; ordered_weight_kg: number; dispatched_quantity: number
+  trip_stop_id: string; manifest_version_id: string; manifest_version: number
+  vehicle_id: string; vehicle_type: string | null; driver_name: string | null
+  delivered_at: string; pod_receiver_name: string | null; pod_notes: string | null
+  receipt: StoreReceipt | null; issue: DeliveryIssue | null
+}
+
+export interface ReceivingInput {
+  receiver_name: string; received_quantity: number; notes: string | null
+}
+export interface IssueInput extends ReceivingInput {
+  issue_type: DeliveryIssueType; affected_quantity: number
+}
+export interface ReceivingResult {
+  receipt: StoreReceipt; issue: DeliveryIssue | null; order_status: string
+}
+export interface DeliveryIssueItem extends DeliveryIssue {
+  order_ref: string; order_status: string; outlet_id: string; depot_code: string
+  receipt: StoreReceipt | null
+}
+
+export async function listStoreDeliveries(): Promise<StoreDelivery[]> {
+  return (await request<{ items: StoreDelivery[] }>('/api/v1/store/deliveries')).items
+}
+
+export function submitStoreReceipt(orderId: string, payload: ReceivingInput, key: string): Promise<ReceivingResult> {
+  return request(`/api/v1/store/orders/${orderId}/receipt`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload) })
+}
+
+export function reportDeliveryIssue(orderId: string, payload: IssueInput, key: string): Promise<ReceivingResult> {
+  return request(`/api/v1/store/orders/${orderId}/issues`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload) })
+}
+
+export async function listDeliveryIssues(): Promise<DeliveryIssueItem[]> {
+  return (await request<{ items: DeliveryIssueItem[] }>('/api/v1/dispatcher/delivery-issues')).items
+}
+
+export function reviewDeliveryIssue(issueId: string, status: 'IN_REVIEW' | 'RESOLVED', reason: string, key: string): Promise<ReceivingResult> {
+  return request(`/api/v1/dispatcher/delivery-issues/${issueId}/review`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ status, reason }) })
+}
+
 export interface CreateStoreOrder {
   requested_delivery_date: string
   temperature_requirement: TemperatureRequirement

@@ -18,6 +18,7 @@ Thumbs.db
 
 # Competition datasets - local use only
 local-data/
+.t09-verification/
 
 #agent commands and guids
 !docs/todo.md

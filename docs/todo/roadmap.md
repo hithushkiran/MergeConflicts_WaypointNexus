@@ -911,12 +911,12 @@ Connect driver completion back to store.
 
 Implement:
 
-* [ ] Delivered status.
-* [ ] Quantity comparison.
-* [ ] Store receipt.
-* [ ] Receiver.
-* [ ] Timestamp.
-* [ ] Duplicate receipt prevention.
+* [x] Delivered status.
+* [x] Quantity comparison.
+* [x] Store receipt.
+* [x] Receiver.
+* [x] Timestamp.
+* [x] Duplicate receipt prevention.
 
 ### Gate 8 — COMPLETE GOLDEN PATH
 
@@ -962,6 +962,16 @@ STORE
 ```
 
 **This is the most important checkpoint in the entire project.**
+
+**T09 verification:** The isolated Compose runner created the 320 kg ambient and
+180 kg chilled orders through the store API, published a compatible trip, recorded
+the 20 kg chilled shortfall, rejected departure while held and stale manifest V1,
+approved/acknowledged 480 kg manifest V2, delivered with stable command replay,
+and completed receipt plus dispatcher case review. A second browser journey
+disconnected the test API, reloaded cached trips and receiving drafts, saved two
+deliveries locally, reloaded the queued commands, reconnected and drained the
+outbox. Browser confirmation and issue review left both orders RECEIVED with
+exactly one POD each. See `docs/T09_VERIFICATION.md` for reproduction and limits.
 
 ---
 

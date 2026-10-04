@@ -198,10 +198,20 @@ def complete_stop(stop_id: UUID, payload: StopCompletion, idempotency_key: str =
         raise api_error(422, "FAILURE_REASON_REQUIRED", "Enter a reason for the failed delivery.")
     now = datetime.now(UTC)
     occurred_at = _event_time(payload.occurred_at, now)
+    manifest = _manifest_ready(db, trip)
+    line = db.scalar(select(ManifestCheck).where(
+        ManifestCheck.manifest_version_id == manifest.id, ManifestCheck.order_id == order.id
+    )) if manifest else None
+    if line is None:
+        db.rollback()
+        raise api_error(409, "DELIVERY_MANIFEST_UNAVAILABLE", "The acknowledged manifest must contain this order.")
+    manifest_snapshot = {"id": str(manifest.id), "version_number": manifest.version_number,
+                         "dispatched_quantity": line.loaded_quantity}
     stop.status, stop.completed_at = payload.outcome, occurred_at
     order.status = "DELIVERED" if payload.outcome == "DELIVERED" else "DELIVERY_FAILED"
     event = DeliveryEvent(trip_stop_id=stop.id, event_type=payload.outcome, occurred_at=occurred_at, command_ref=idempotency_key, actor_id=principal.user.id,
-                          metadata_={"receiver_name": payload.receiver_name, "notes": payload.notes})
+                          metadata_={"receiver_name": payload.receiver_name, "notes": payload.notes,
+                                     "manifest": manifest_snapshot})
     db.add(event)
     db.flush()
     db.add(ProofOfDelivery(trip_stop_id=stop.id, delivery_event_id=event.id, receiver_name=payload.receiver_name,
