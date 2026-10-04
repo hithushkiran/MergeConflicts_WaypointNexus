@@ -38,6 +38,14 @@ The database role code `STORE_MANAGER` maps to API role `STORE`; the other API r
 
 Authorization dependencies are provided for protected route handlers through `require_roles(...)` in the identity module. Every future operational route must declare its allowed roles and enforce outlet/depot/assignment scope in the handler or service. Authentication endpoints are intentionally available to all roles; `/me` and `/logout` require a valid session.
 
+## Store orders
+
+`GET /api/v1/store/orders/eligibility` returns the current cutoff and earliest eligible delivery date. `GET /api/v1/store/orders` returns the signed-in store's orders as `{ "items": [], "next_cursor": null }`. Both require the `STORE` role and an assigned outlet; callers cannot choose an outlet in the request.
+
+`POST /api/v1/store/orders` creates a confirmed shipment request and requires an `Idempotency-Key`. The body contains `requested_delivery_date`, `temperature_requirement` (`AMBIENT`, `CHILLED`, or `FROZEN`), positive `units`, `weight_kg`, `volume_m3`, and optional `notes`. The server takes `outlet_id` from the authenticated account. Replaying the same key and request returns the original order; a different request with that key returns `409 IDEMPOTENCY_KEY_REUSED`.
+
+The configurable `ORDER_CUTOFF_LOCAL_TIME` defaults to 16:00 in `Asia/Colombo`. Before or at the cutoff, orders may be requested for the current calendar date; after it, the next eligible date is the following calendar date. The official business calendar is not present, so weekends and holidays are not skipped. A date earlier than the next eligible date returns `422 ORDER_DATE_TOO_SOON` with the eligible date and explanation. Stored and returned timestamps use UTC.
+
 ## Roles and current workflow states
 
 The API must check authorization on the server for every protected route. Frontend route hiding is only a usability aid. A user cannot select or override their role in a request.

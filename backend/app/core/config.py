@@ -1,4 +1,5 @@
 from functools import lru_cache
+from datetime import time
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +16,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     dev_seed_password: str | None = None
     auth_session_ttl_hours: int = Field(default=12, ge=1, le=720)
+    order_cutoff_local_time: time = time(16, 0)
 
     @property
     def cors_origin_list(self) -> list[str]:

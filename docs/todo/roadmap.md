@@ -278,30 +278,30 @@ This is the first real business workflow.
 
 ## 5.1 Store dashboard
 
-* [ ] Store login.
-* [ ] Store dashboard.
-* [ ] Order list.
-* [ ] Order status.
-* [ ] Loading state.
-* [ ] Error state.
-* [ ] Empty state.
+* [x] Store login.
+* [x] Store dashboard.
+* [x] Outlet-scoped order list.
+* [x] Order status.
+* [x] Loading state.
+* [x] Error state.
+* [x] Empty state.
 
 ## 5.2 Order creation
 
-* [ ] Product/order form.
-* [ ] Quantity.
-* [ ] Requested date.
-* [ ] Validation.
-* [ ] Submit.
-* [ ] Order reference.
+* [x] Shipment order form (the repository has no product catalog; captures aggregate shipment requirements).
+* [x] Quantity.
+* [x] Requested date.
+* [x] Validation.
+* [x] Submit.
+* [x] Order reference.
 
 ## 5.3 Cutoff
 
-* [ ] Cutoff calculation.
-* [ ] Colombo timezone handling.
-* [ ] Late-order handling.
-* [ ] Next eligible run.
-* [ ] Explanation to user.
+* [x] Configurable cutoff calculation (default 16:00 Colombo).
+* [x] Colombo timezone handling.
+* [x] Late-order handling (after cutoff, next calendar date is eligible).
+* [x] Next eligible run date.
+* [x] Explanation to user.
 
 ### Gate 1 — ORDER
 
@@ -317,7 +317,7 @@ Order persists in database
 Order appears in dashboard
 ```
 
-Run this from a **fresh seeded environment**.
+Run this from a **fresh seeded environment**. The automated SQLite integration tests cover create/persist/list, outlet scope, validation, and idempotent retry. The Compose end-to-end seed gate remains pending until the official ignored `local-data/outlets.csv` and `local-data/vehicles.csv` files are mounted.
 
 If it fails, fix it before continuing.
 

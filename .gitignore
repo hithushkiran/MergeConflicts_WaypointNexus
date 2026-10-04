@@ -23,3 +23,5 @@ local-data/
 !docs/todo.md
 !docs/todo/
 !docs/todo/**
+docs/frontend_design
+*.docx

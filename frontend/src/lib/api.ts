@@ -23,6 +23,40 @@ interface LoginResponse {
   user: UserProfile
 }
 
+export type TemperatureRequirement = 'AMBIENT' | 'CHILLED' | 'FROZEN'
+
+export interface StoreOrder {
+  id: string
+  reference: string
+  outlet_id: string
+  requested_delivery_date: string
+  temperature_requirement: TemperatureRequirement
+  units: number
+  weight_kg: number
+  volume_m3: number
+  status: string
+  notes: string | null
+  cutoff_at: string | null
+  created_at: string
+}
+
+export interface OrderEligibility {
+  cutoff_at: string
+  cutoff_time: string
+  next_eligible_delivery_date: string
+  late_order: boolean
+  explanation: string
+}
+
+export interface CreateStoreOrder {
+  requested_delivery_date: string
+  temperature_requirement: TemperatureRequirement
+  units: number
+  weight_kg: number
+  volume_m3: number
+  notes: string | null
+}
+
 interface ApiErrorBody {
   detail?: {
     code?: string
@@ -83,6 +117,23 @@ export async function signIn(email: string, password: string): Promise<UserProfi
 
 export function currentUser(): Promise<UserProfile> {
   return request<UserProfile>('/api/v1/auth/me')
+}
+
+export function getOrderEligibility(): Promise<OrderEligibility> {
+  return request<OrderEligibility>('/api/v1/store/orders/eligibility')
+}
+
+export async function listStoreOrders(): Promise<StoreOrder[]> {
+  const result = await request<{ items: StoreOrder[]; next_cursor: string | null }>('/api/v1/store/orders')
+  return result.items
+}
+
+export function createStoreOrder(order: CreateStoreOrder, idempotencyKey: string): Promise<StoreOrder> {
+  return request<StoreOrder>('/api/v1/store/orders', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify(order),
+  })
 }
 
 export async function signOut(): Promise<void> {

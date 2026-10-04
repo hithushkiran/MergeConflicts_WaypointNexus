@@ -13,7 +13,7 @@ This folder is the source of truth for unfinished project work. The old single-f
 
 The repository includes the FND-01/FND-03 foundation, versioned authentication endpoints, and shared API conventions. Order, planning, and delivery workflows remain unimplemented. The roadmap has many unchecked foundation tasks that may already be complete. Reconcile each candidate against the current code and tests before changing it; keep the README, handoff, and this board consistent when evidence changes.
 
-T01 and T02 are complete. Operational trip assignment enforcement belongs with T07 because the current trip schema has no driver assignment field; the API contract records this dependency. Do not assume every unchecked roadmap item is still open.
+T01 and T02 are complete. T03's implementation and automated checks are complete, but its fresh seeded Compose acceptance gate is blocked because the official local data files are absent. Operational trip assignment enforcement belongs with T07 because the current trip schema has no driver assignment field; the API contract records this dependency. Do not assume every unchecked roadmap item is still open.
 
 ## Order and gates
 
@@ -39,7 +39,7 @@ P0 work and its acceptance gate must be complete before starting dependent P0 wo
 | --- | --- | --- | --- | --- | --- |
 | T01 | Reconcile foundation and development setup | done | Codex | — | Repaired the broken Buildx symlink to `/usr/libexec/docker/cli-plugins/docker-buildx`. Declares HTTPX for the backend TestClient and selects uvloop when available. `docker compose up --build -d` starts db/api/web; API `/health` and `/ready` both return success, with database readiness confirmed. Backend pytest: 8 passed, 1 skipped (optional PostgreSQL integration URL unset). Frontend test (1), typecheck, ESLint, and production build pass. |
 | T02 | Authentication, authorization, and API contracts | done | Codex | T01 | DB-backed login/session/logout, development-only password seeding, frontend sign-in/session restore, server-side role guards, and shared API contracts are implemented. Backend: 20 passed, 1 skipped; frontend test, typecheck, lint, and production build pass. Trip assignment scope is deferred to T07 because no assignment field or trip API exists yet. |
-| T03 | Store order workflow | open | — | T02 | |
+| T03 | Store order workflow | blocked | Codex | T02 | Outlet-scoped order create/list, idempotency, cutoff eligibility, and store dashboard are implemented. Backend: 28 passed, 1 skipped; frontend test, typecheck, lint, and build pass. Fresh official-data seed gate needs `local-data/outlets.csv` and `local-data/vehicles.csv`; Compose logs confirm those files are not mounted. Add the official files locally, then rerun the fresh-seed end-to-end gate. |
 | T04 | Planning and eligibility/allocation | open | — | T03, T02 | |
 | T05 | Dispatcher review and plan publication | open | — | T04 | |
 | T06 | Loader, shortfall, hold, and revised manifest | open | — | T05 | |

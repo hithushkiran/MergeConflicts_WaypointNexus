@@ -70,6 +70,8 @@ When `APP_ENV=development`, seeded users receive a password hash from `DEV_SEED_
 
 The versioned API contract is documented in [docs/api-contracts.md](docs/api-contracts.md). Authentication endpoints are `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
 
+Store accounts can create and list outlet-scoped shipment requests from the web dashboard. The Colombo cutoff is configurable with `ORDER_CUTOFF_LOCAL_TIME` (default `16:00`); see the API contract for date eligibility and late-order behavior.
+
 See [the foundation handoff](docs/FOUNDATION_HANDOFF.md) for stable development fixtures and module-owner notes.
 
 Local services:
