@@ -62,7 +62,7 @@ export function ReceiptOutcome({ result }: { result: ReceivingResult }) {
   </div>
 }
 
-function ReceivingForm({ delivery, onSaved }: { delivery: StoreDelivery; onSaved: (result: ReceivingResult) => void }) {
+function ReceivingForm({ delivery, onSaved, onModeChange }: { delivery: StoreDelivery; onSaved: (result: ReceivingResult) => void; onModeChange: (issue: boolean) => void }) {
   const [mode, setMode] = useState<'confirm' | 'issue'>('confirm')
   const [receiver, setReceiver] = useState('')
   const [quantity, setQuantity] = useState(String(delivery.dispatched_quantity))
@@ -112,7 +112,7 @@ function ReceivingForm({ delivery, onSaved }: { delivery: StoreDelivery; onSaved
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
         <div className="flex flex-wrap gap-3">
           <button className={primary} disabled={busy || (mode === 'confirm' && !accepted) || (mode === 'issue' && issueType === 'MISSING_QUANTITY' && missing <= 0)} type="submit"><img src="/receipt-assets/confirm.svg" alt="" width={16} height={16} />{busy ? 'Saving…' : mode === 'issue' ? 'Submit Issue' : 'Confirm Receipt'}</button>
-          <button className={secondary} type="button" onClick={() => { setMode(mode === 'confirm' ? 'issue' : 'confirm'); setError('') }}>{mode === 'confirm' && <img src="/receipt-assets/report.svg" alt="" width={16} height={16} />}{mode === 'issue' ? 'Cancel' : 'Report an Issue'}</button>
+          <button className={secondary} type="button" onClick={() => { setMode(mode === 'confirm' ? 'issue' : 'confirm'); onModeChange(mode === 'confirm'); setError('') }}>{mode === 'confirm' && <img src="/receipt-assets/report.svg" alt="" width={16} height={16} />}{mode === 'issue' ? 'Cancel' : 'Report an Issue'}</button>
         </div>
       </fieldset>
     </form>
@@ -120,6 +120,7 @@ function ReceivingForm({ delivery, onSaved }: { delivery: StoreDelivery; onSaved
 }
 
 export default function StoreReceipts({ onReceived }: { onReceived: () => void }) {
+  const [issueMode, setIssueMode] = useState(false)
   const [deliveries, setDeliveries] = useState<StoreDelivery[]>([])
   const [selected, setSelected] = useState('')
   const [loading, setLoading] = useState(true)
@@ -138,15 +139,15 @@ export default function StoreReceipts({ onReceived }: { onReceived: () => void }
     onReceived()
   }
 
-  return <section className="mt-8 rounded-xl bg-[#f3f7fb] p-4 text-[#10253d] sm:p-6" aria-labelledby="receipts-heading">
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">Store Operations / Deliveries</p><h2 id="receipts-heading" className="mt-1 text-2xl font-bold">{delivery?.issue ? 'Issue Submitted' : 'Confirm Delivery'}</h2><p className="mt-1 text-sm text-[#526477]">Review the delivered quantities before confirming receipt.</p></div><button className={secondary} disabled={loading} onClick={() => void refresh()}>Refresh deliveries</button></div>
+  return <section className="wp-receiving text-[#10253d]" aria-labelledby="receipts-heading">
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">Store Operations / Deliveries</p><h1 id="receipts-heading" className="mt-1 text-2xl font-bold">{delivery?.issue ? 'Issue Submitted' : delivery?.receipt ? 'Delivery Receipt' : issueMode ? 'Report Delivery Issue' : 'Confirm Delivery'}</h1><p className="mt-1 text-sm text-[#526477]">Review the delivered quantities before confirming receipt.</p></div><button className={secondary} disabled={loading} onClick={() => void refresh()}>Refresh deliveries</button></div>
     {error && <p role="alert" className="mb-4 text-sm text-rose-700">{error}</p>}
     {loading ? <p role="status">Loading deliveries…</p> : deliveries.length === 0 ? <p className={card}>No successfully synced deliveries are available for receipt yet.</p> : <>
-      <label className="mb-5 block text-sm font-medium">Delivered order<select className={field} value={selected} onChange={event => setSelected(event.target.value)}>{deliveries.map(item => <option key={item.order_id} value={item.order_id}>{item.order_ref} · {item.receipt?.status ?? 'Awaiting receipt'}</option>)}</select></label>
+      <label className="mb-5 block text-sm font-medium">Delivered order<select className={field} value={selected} onChange={event => { setSelected(event.target.value); setIssueMode(false) }}>{deliveries.map(item => <option key={item.order_id} value={item.order_id}>{item.order_ref} · {item.receipt?.status ?? 'Awaiting receipt'}</option>)}</select></label>
       {delivery && <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(250px,1fr)]">
         <div className="min-w-0 space-y-6">
           <article className={card}><div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">Delivery Completed</h3><span className="rounded-full bg-[#e8f5ee] px-3 py-1 text-xs font-semibold text-[#147d64]">Delivered</span></div><p className="mt-2 text-sm text-[#526477]">{delivery.order_ref} · {delivery.brand} · {delivery.district} ({delivery.outlet_id})</p><p className="mt-4 text-sm">Actual delivery: {receivingTime(delivery.delivered_at)}</p></article>
-          {delivery.receipt ? <><article className={card}><h3 className="mb-4 font-bold">Recorded quantity comparison</h3><QuantityComparison delivery={delivery} counted={delivery.receipt.received_quantity} /></article><ReceiptOutcome result={{ receipt: delivery.receipt, issue: delivery.issue, order_status: delivery.order_status }} /></> : <ReceivingForm key={delivery.order_id} delivery={delivery} onSaved={saved} />}
+          {delivery.receipt ? <><article className={card}><h3 className="mb-4 font-bold">Recorded quantity comparison</h3><QuantityComparison delivery={delivery} counted={delivery.receipt.received_quantity} /></article><ReceiptOutcome result={{ receipt: delivery.receipt, issue: delivery.issue, order_status: delivery.order_status }} /></> : <ReceivingForm key={delivery.order_id} delivery={delivery} onSaved={saved} onModeChange={setIssueMode} />}
         </div>
         <aside className={card}><h3 className="font-bold">Order &amp; Manifest Reference</h3><dl className="mt-4 divide-y divide-[#e5ebf2] text-sm">
           {Object.entries({ 'Order reference': delivery.order_ref, 'Manifest version': `V${delivery.manifest_version}`, 'Vehicle': delivery.vehicle_id, 'Dispatch depot': delivery.depot_code, 'Driver': delivery.driver_name ?? 'Not recorded', 'POD receiver': delivery.pod_receiver_name ?? 'Not recorded', 'Order status': delivery.order_status }).map(([label, value]) => <div className="flex flex-wrap justify-between gap-2 py-3" key={label}><dt className="text-[#526477]">{label}</dt><dd className="break-all font-medium">{value}</dd></div>)}

@@ -94,6 +94,10 @@ export async function listStoreDeliveries(): Promise<StoreDelivery[]> {
   return (await request<{ items: StoreDelivery[] }>('/api/v1/store/deliveries')).items
 }
 
+export async function listStoreIssues(): Promise<DeliveryIssueItem[]> {
+  return (await request<{ items: DeliveryIssueItem[] }>('/api/v1/store/issues')).items
+}
+
 export function submitStoreReceipt(orderId: string, payload: ReceivingInput, key: string): Promise<ReceivingResult> {
   return request(`/api/v1/store/orders/${orderId}/receipt`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload) })
 }

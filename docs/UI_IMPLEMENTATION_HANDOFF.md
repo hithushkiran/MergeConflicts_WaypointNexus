@@ -12,7 +12,8 @@ This document records the review of the target UI against the current Waypoint N
 - Backend: FastAPI routes in `backend/app/modules/`; PostgreSQL models and migrations in `backend/app/infrastructure/persistence.py` and `backend/migrations/`.
 - Existing operational APIs: authentication; store order eligibility/list/create; dispatcher order queue, planning, saved plans, publish, driver assignment, shortfall list/resolution; loader trip/manifests/checks/acknowledgement; driver assigned trips, depart, arrive, and complete.
 - Driver offline cache and outbox are implemented in `frontend/src/lib/driverOffline.ts` and the driver workspace.
-- The database has `receipts` and `delivery_issues` tables, but these are not yet exposed through store APIs or a store receipt workflow.
+- T09 exposes outlet-scoped delivery, receipt and issue APIs, immutable receiving quantities, idempotent commands, and dispatcher issue review/closure. See [T09 verification](T09_VERIFICATION.md).
+- T10 is in progress: a shared role shell and the S01–S03 store slice are implemented. Remaining role workspaces retain their temporary workflow UI. See [T10 verification and remaining work](T10_VERIFICATION.md).
 - See [API contracts](api-contracts.md) for existing request and response contracts. Do not infer that a database model means a usable API already exists.
 
 ## Screen-to-capability map
@@ -20,7 +21,7 @@ This document records the review of the target UI against the current Waypoint N
 | Figma area | Existing support | Work needed before presenting as live functionality |
 | --- | --- | --- |
 | Store S01–S03: orders, create, confirmation, planned/deferred notice | Order eligibility, order list, create, dispatcher plan and order status exist. | Build the screens and role navigation. Store APIs do not yet provide the planned trip/ETA details shown in S03; either add a scoped read API or simplify S03 to available status information. |
-| Store S04/S04B/S05: receipt and discrepancy report | Receipt and delivery-issue tables exist only. | T09 must define and implement outlet-scoped receipt and issue APIs, state transitions, authorization, audit/idempotency expectations, and UI. |
+| Store S04/S04B/S05: receipt and discrepancy report | T09 outlet-scoped delivery/receipt/issue APIs and functional receiving UI exist. | T10 must finish Figma presentation and responsive visual verification, preserving T09 state transitions, immutable quantities, authorization and replay semantics. |
 | Store S06–S10: history, detail, dashboard, profile, settings | Order list and `/auth/me` exist. | History can start from the order list; decide whether detail and dashboard summaries can be derived safely from existing data. Outlet profile and preferences/settings need supporting data and APIs if they remain interactive. |
 | Dispatcher D01–D04: confirmed queue, plan, deferral, publish/assignment | Queue/filter, candidate plan, saved versions, publish, driver assignment, deferral decisions and shortfall resolution exist. | Build the screens against current APIs. D03 currently has no separate editable deferral-note command; the planner's reason is authoritative. Manual plan editing is not supported. Keep driver assignment aligned with the published plan/state rules. |
 | Dispatcher G01–G03: live routes, shortfall decision, future capacity | Shortfall list/resolution exists. Plan results contain trips and metrics. | Shortfall decision can use current APIs. A live route feed and forward-looking capacity forecast are not present; keep these as out of scope or define new API/data requirements before implementation. |
@@ -82,6 +83,6 @@ Run relevant backend and frontend tests, typecheck/lint/build, then verify the c
 ## Decisions still needed
 
 - Confirm the canonical shortfall resolution for the demo (partial fulfillment is assumed above) and whether any exact Figma frame must be changed to match it.
-- Agree the store receipt/issue lifecycle and whether dispatch needs an issue-review/close action in T09.
+- Receipt/issue lifecycle and dispatcher review/close are defined and implemented in T09; use the existing API contracts rather than reopening those decisions.
 - Decide which of the optional operational panels are in the deliverable scope. Do not treat them as prerequisites for the working core golden path.
 - Agree whether POD photo/signature is required; if yes, select storage and upload constraints before designing the API.
