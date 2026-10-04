@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.database import get_db_session
-from app.infrastructure.persistence import AuditEvent, Base, Deferral, Depot, Order, Outlet, PlanVersion, Role, Trip, User, Vehicle
+from app.infrastructure.persistence import AuditEvent, Base, Deferral, Depot, ManifestVersion, Order, Outlet, PlanVersion, Role, Shortfall, Trip, User, Vehicle
 from app.main import app
 from app.modules.identity.security import hash_password
 from app.modules.planning.reference_data import load_planning_reference_data
@@ -67,7 +67,9 @@ def dispatcher_factory(tmp_path, monkeypatch):
                 ))
             role = Role(code="DISPATCHER", name="Dispatcher")
             store_role = Role(code="STORE_MANAGER", name="Store Manager")
-            session.add_all([role, store_role])
+            loader_role = Role(code="LOADER", name="Loader")
+            driver_role = Role(code="DRIVER", name="Driver")
+            session.add_all([role, store_role, loader_role, driver_role])
             session.flush()
             session.add_all([
                 User(email="dispatcher@test.local", display_name="Dispatcher", active=True,
@@ -75,6 +77,10 @@ def dispatcher_factory(tmp_path, monkeypatch):
                 User(email="store@test.local", display_name="Store", active=True,
                      role_id=store_role.id, outlet_id=data.orders[0]["outlet_id"],
                      password_hash=hash_password("test-password")),
+                User(email="loader@test.local", display_name="Loader", active=True, role_id=loader_role.id,
+                     depot_code="Peliyagoda", password_hash=hash_password("test-password")),
+                User(email="driver@test.local", display_name="Driver", active=True, role_id=driver_role.id,
+                     depot_code="Peliyagoda", password_hash=hash_password("test-password")),
             ])
             session.commit()
         yield client, factory
@@ -163,6 +169,103 @@ def test_dispatcher_can_review_and_publish_a_candidate(dispatcher_factory):
         assert session.scalar(select(AuditEvent).where(AuditEvent.action == "PUBLISHED")) is not None
         assert session.scalar(select(Trip).where(Trip.plan_version_id == version.id, Trip.status != "PLANNED")) is None
         assert session.scalar(select(Order).where(Order.status == "CONFIRMED")) is None
+
+
+def test_loader_shortfall_hold_resolution_revision_and_acknowledgement(dispatcher_factory):
+    client, factory = dispatcher_factory
+    dispatcher_headers = auth(client)
+    loader_headers = auth(client, "loader@test.local")
+    driver_headers = auth(client, "driver@test.local")
+    created = client.post("/api/v1/dispatcher/plans", json={"planning_date": PLANNING_DATE.isoformat()}, headers={**dispatcher_headers, "Idempotency-Key": "loader-candidate"})
+    assert created.status_code == 201
+    plan_id = created.json()["plan"]["id"]
+    published = client.post(f"/api/v1/dispatcher/plans/{plan_id}/publish", json={"reason": "ready for loading"}, headers={**dispatcher_headers, "Idempotency-Key": "loader-publish"})
+    assert published.status_code == 200
+
+    trips = client.get("/api/v1/loader/trips", headers=loader_headers)
+    assert trips.status_code == 200
+    trip = trips.json()["items"][0]
+    line = trip["manifest"]["lines"][0]
+    bad_check = client.post(f"/api/v1/loader/trips/{trip['id']}/checks", headers=loader_headers, json={
+        "manifest_version": 1,
+        "lines": [{"order_id": item["order_id"], "status": "DAMAGED" if item["order_id"] == line["order_id"] else "LOADED",
+                   "quantity": item["expected_quantity"] if item["order_id"] == line["order_id"] else item["expected_quantity"],
+                   "notes": "Carton damaged" if item["order_id"] == line["order_id"] else None}
+                  for item in trip["manifest"]["lines"]],
+    })
+    assert bad_check.status_code == 200, bad_check.text
+    assert bad_check.json()["trip_status"] == "DISPATCH_HOLD"
+    shortfalls = client.get("/api/v1/dispatcher/shortfalls", headers=dispatcher_headers)
+    assert shortfalls.status_code == 200
+    issue = next(item for item in shortfalls.json()["items"] if item["trip_id"] == trip["id"])
+    blocked = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers=driver_headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "DEPARTURE_BLOCKED"
+    resolved = client.post(f"/api/v1/dispatcher/shortfalls/{issue['id']}/resolve", headers=dispatcher_headers,
+                           json={"action": "RELOAD_FOUND", "reason": "Second pallet check confirmed full quantity"})
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["manifest"]["version_number"] == 2
+    stale = client.post(f"/api/v1/loader/trips/{trip['id']}/checks", headers=loader_headers, json={
+        "manifest_version": 1, "lines": [{"order_id": line["order_id"], "status": "LOADED", "quantity": line["expected_quantity"]}],
+    })
+    assert stale.status_code == 409
+    current = client.get(f"/api/v1/loader/trips/{trip['id']}/manifest", headers=loader_headers)
+    ack = client.post(f"/api/v1/loader/manifests/{current.json()['manifest']['id']}/acknowledge", headers=loader_headers)
+    assert ack.status_code == 200, ack.text
+    assert ack.json()["trip_status"] == "READY"
+    assert client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers=driver_headers).json()["detail"]["code"] == "TRIP_NOT_READY"
+    with factory() as session:
+        assert session.scalar(select(Shortfall).where(Shortfall.id == UUID(issue["id"]))).status == "RESOLVED"
+        assert session.scalar(select(ManifestVersion).where(ManifestVersion.trip_id == UUID(trip["id"]), ManifestVersion.version_number == 2)) is not None
+
+
+def test_shortfall_reallocation_creates_capacity_checked_plan_and_revised_manifests(dispatcher_factory):
+    client, factory = dispatcher_factory
+    dispatcher_headers = auth(client)
+    loader_headers = auth(client, "loader@test.local")
+    created = client.post("/api/v1/dispatcher/plans", json={"planning_date": PLANNING_DATE.isoformat()}, headers={**dispatcher_headers, "Idempotency-Key": "realloc-candidate"})
+    assert created.status_code == 201
+    plan_id = created.json()["plan"]["id"]
+    assert client.post(f"/api/v1/dispatcher/plans/{plan_id}/publish", json={"reason": "ready"}, headers={**dispatcher_headers, "Idempotency-Key": "realloc-publish"}).status_code == 200
+
+    trips = client.get("/api/v1/loader/trips", headers=loader_headers).json()["items"]
+    source = next(trip for trip in trips if any(line["order_ref"] == "PEAK-ORD-006" for line in trip["manifest"]["lines"]))
+    target = next(trip for trip in trips if any(line["order_ref"] == "PEAK-ORD-007" for line in trip["manifest"]["lines"]))
+    affected = next(line for line in source["manifest"]["lines"] if line["order_ref"] == "PEAK-ORD-006")
+    checks = [{"order_id": line["order_id"], "status": "DAMAGED" if line["order_id"] == affected["order_id"] else "LOADED",
+               "quantity": line["expected_quantity"], "notes": "shortfall" if line["order_id"] == affected["order_id"] else None}
+              for line in source["manifest"]["lines"]]
+    checked = client.post(f"/api/v1/loader/trips/{source['id']}/checks", headers=loader_headers,
+                          json={"manifest_version": source["manifest"]["version_number"], "lines": checks})
+    assert checked.status_code == 200
+    issue = next(item for item in client.get("/api/v1/dispatcher/shortfalls", headers=dispatcher_headers).json()["items"]
+                 if item["order_ref"] == "PEAK-ORD-006")
+    incompatible = next(trip for trip in trips if trip["id"] != source["id"] and trip["id"] != target["id"])
+    rejected = client.post(f"/api/v1/dispatcher/shortfalls/{issue['id']}/resolve", headers=dispatcher_headers,
+                           json={"action": "REALLOCATION", "target_trip_id": incompatible["id"], "reason": "Try incompatible route"})
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "REALLOCATION_ROUTE_MISMATCH"
+    response = client.post(f"/api/v1/dispatcher/shortfalls/{issue['id']}/resolve", headers=dispatcher_headers,
+                           json={"action": "REALLOCATION", "target_trip_id": target["id"], "reason": "Move to the compatible Gampaha trip"})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "RESOLUTION_PENDING"
+    replan_id = response.json()["candidate_plan_id"]
+    replanned = client.get(f"/api/v1/dispatcher/plans/{replan_id}", headers=dispatcher_headers).json()["plan"]
+    moved_trip = next(trip for trip in replanned["trips"] if trip["vehicle_id"] == target["vehicle_id"] and trip["trip_number"] == target["trip_number"])
+    assert any(stop["order_ref"] == "PEAK-ORD-006" for stop in moved_trip["stops"])
+    assert all(trip["metrics"]["time_windows_valid"] for trip in replanned["trips"])
+
+    published = client.post(f"/api/v1/dispatcher/plans/{replan_id}/publish", json={"reason": "Approved capacity checked reallocation"}, headers={**dispatcher_headers, "Idempotency-Key": "realloc-publish-v2"})
+    assert published.status_code == 200, published.text
+    refreshed = client.get("/api/v1/loader/trips", headers=loader_headers)
+    assert refreshed.status_code == 200
+    revised_target = next(trip for trip in refreshed.json()["items"] if trip["vehicle_id"] == target["vehicle_id"] and trip["trip_number"] == target["trip_number"])
+    assert revised_target["manifest"]["version_number"] == 2
+    assert any(line["order_ref"] == "PEAK-ORD-006" for line in revised_target["manifest"]["lines"])
+    assert client.get("/api/v1/dispatcher/shortfalls", headers=dispatcher_headers).json()["items"] == []
+    with factory() as session:
+        assert session.get(PlanVersion, UUID(plan_id)).status == "SUPERSEDED"
+        assert session.scalar(select(Shortfall).where(Shortfall.id == UUID(issue["id"]))).status == "RESOLVED"
 
 
 def test_missing_planning_inputs_are_reported_without_persisting_a_candidate(dispatcher_factory, monkeypatch):

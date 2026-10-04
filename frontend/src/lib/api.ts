@@ -134,6 +134,64 @@ export interface DispatcherPlan {
   diagnostics: string[]
 }
 
+export interface ManifestLine {
+  order_id: string
+  order_ref: string
+  outlet_id: string
+  load_sequence: number
+  expected_quantity: number
+  loaded_quantity: number
+  status: string
+  notes: string | null
+}
+
+export interface LoaderTrip {
+  id: string
+  vehicle_id: string
+  driver: string | null
+  departure: string | null
+  plan_version: number
+  trip_number: number
+  status: string
+  manifest: { id: string; version_number: number; status: string; acknowledged_at: string | null; lines: ManifestLine[] }
+}
+
+export interface ShortfallItem {
+  id: string
+  trip_id: string | null
+  order_id: string
+  order_ref: string
+  quantity: number
+  reason: string
+  blocking: boolean
+  status: string
+  resolution_plan_version_id: string | null
+}
+
+export async function listLoaderTrips(): Promise<LoaderTrip[]> {
+  return (await request<{ items: LoaderTrip[] }>('/api/v1/loader/trips')).items
+}
+
+export async function listManifestVersions(tripId: string): Promise<LoaderTrip['manifest'][]> {
+  return (await request<{ items: LoaderTrip['manifest'][] }>(`/api/v1/loader/trips/${tripId}/manifests`)).items
+}
+
+export function submitLoadChecks(tripId: string, version: number, lines: Array<{ order_id: string; status: string; quantity: number; notes: string | null }>): Promise<{ manifest: LoaderTrip['manifest']; trip_status: string }> {
+  return request(`/api/v1/loader/trips/${tripId}/checks`, { method: 'POST', body: JSON.stringify({ manifest_version: version, lines }) })
+}
+
+export function acknowledgeManifest(manifestId: string): Promise<{ trip_status: string }> {
+  return request(`/api/v1/loader/manifests/${manifestId}/acknowledge`, { method: 'POST' })
+}
+
+export async function listShortfalls(): Promise<ShortfallItem[]> {
+  return (await request<{ items: ShortfallItem[] }>('/api/v1/dispatcher/shortfalls')).items
+}
+
+export function resolveShortfall(id: string, action: string, reason: string, quantity?: number, substitute_reference?: string, target_trip_id?: string): Promise<{ candidate_plan_id?: string }> {
+  return request(`/api/v1/dispatcher/shortfalls/${id}/resolve`, { method: 'POST', body: JSON.stringify({ action, reason, quantity, substitute_reference, target_trip_id }) })
+}
+
 interface ApiErrorBody {
   detail?: {
     code?: string

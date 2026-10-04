@@ -15,10 +15,13 @@ from app.infrastructure.persistence import (
     AuditEvent,
     Deferral,
     IdempotencyRecord,
+    ManifestCheck,
+    ManifestVersion,
     Order,
     Outlet,
     PlanVersion,
     PlanningRun,
+    Shortfall,
     Trip,
     TripStop,
 )
@@ -370,10 +373,61 @@ def publish_plan(
     decision_ids = [order.id for order in decisions]
     if len(decision_ids) != len(set(decision_ids)) or not decisions:
         raise api_error(status.HTTP_409_CONFLICT, "PLAN_COVERAGE_INVALID", "Every planned order must have exactly one served or deferred decision.")
-    if any(order.status != "CONFIRMED" for order in decisions):
+    predecessor = None
+    if version.revises_plan_version_id:
+        predecessor = db.get(PlanVersion, version.revises_plan_version_id)
+        if predecessor is None or predecessor.status != "PUBLISHED":
+            raise api_error(status.HTTP_409_CONFLICT, "PLAN_REVISION_STALE", "The published plan this candidate revises is no longer current.")
+        old_stops = db.scalars(select(TripStop).join(Trip, Trip.id == TripStop.trip_id).where(Trip.plan_version_id == predecessor.id)).all()
+        old_deferrals = db.scalars(select(Deferral).where(Deferral.plan_version_id == predecessor.id)).all()
+        if {stop.order_id for stop in old_stops} | {defer.order_id for defer in old_deferrals} != set(decision_ids):
+            raise api_error(status.HTTP_409_CONFLICT, "PLAN_COVERAGE_INVALID", "A revised plan must cover exactly the orders from the plan it replaces.")
+        if any(order.status not in {"PLANNED", "DEFERRED"} for order in decisions):
+            raise api_error(status.HTTP_409_CONFLICT, "ORDER_STATE_CHANGED", "One or more orders changed after this plan was generated.")
+    elif any(order.status != "CONFIRMED" for order in decisions):
         raise api_error(status.HTTP_409_CONFLICT, "ORDER_STATE_CHANGED", "One or more orders changed after this plan was created.")
 
     now = datetime.now(UTC)
+    if predecessor:
+        predecessor.status = "SUPERSEDED"
+        old_trips = db.scalars(select(Trip).where(Trip.plan_version_id == predecessor.id)).all()
+        old_trip_ids = [trip.id for trip in old_trips]
+        for old_trip in old_trips:
+            old_trip.status = "SUPERSEDED"
+        db.flush()
+        blocking_issues = db.scalars(select(Shortfall).where(
+            Shortfall.trip_id.in_(old_trip_ids), Shortfall.status.in_(("OPEN", "RESOLUTION_PENDING")),
+            Shortfall.blocking.is_(True),
+            or_(Shortfall.resolution_plan_version_id.is_(None), Shortfall.resolution_plan_version_id != version.id),
+        )).all() if old_trip_ids else []
+        if blocking_issues:
+            raise api_error(status.HTTP_409_CONFLICT, "OTHER_OPEN_SHORTFALLS", "Resolve all other loading exceptions on the old plan before publishing this reallocation.")
+        reallocation_issue = db.scalar(select(Shortfall).where(Shortfall.resolution_plan_version_id == version.id, Shortfall.status == "RESOLUTION_PENDING"))
+        if reallocation_issue is None:
+            raise api_error(status.HTTP_409_CONFLICT, "REALLOCATION_SHORTFALL_MISSING", "This revised plan is not linked to an open reallocation.")
+        reallocation_issue.status = "RESOLVED"
+        reallocation_issue.resolution += f" (published as plan V{version.version_number})"
+        db.add(AuditEvent(aggregate_type="SHORTFALL", aggregate_id=str(reallocation_issue.id), action="RESOLVED_BY_REALLOCATION",
+                          actor_id=principal.user.id, old_state={"status": "RESOLUTION_PENDING"},
+                          new_state={"status": "RESOLVED", "plan_version_id": str(version.id)}, reason=reallocation_issue.resolution))
+        for old_trip in old_trips:
+            old_manifests = db.scalars(select(ManifestVersion).where(ManifestVersion.trip_id == old_trip.id)).all()
+            prior_number = max((manifest.version_number for manifest in old_manifests), default=0)
+            for old_manifest in old_manifests:
+                old_manifest.status = "SUPERSEDED"
+            revised_trip = next((trip for trip in trip_rows if trip.vehicle_id == old_trip.vehicle_id and trip.trip_number == old_trip.trip_number), None)
+            if revised_trip is None:
+                continue
+            revised_manifest = ManifestVersion(trip_id=revised_trip.id, version_number=prior_number + 1,
+                                               created_by_id=principal.user.id, status="CURRENT")
+            db.add(revised_manifest)
+            db.flush()
+            revised_stops = db.execute(select(TripStop, Order).join(Order, Order.id == TripStop.order_id)
+                                       .where(TripStop.trip_id == revised_trip.id).order_by(TripStop.sequence_number)).all()
+            for revised_stop, revised_order in revised_stops:
+                db.add(ManifestCheck(trip_id=revised_trip.id, order_id=revised_order.id,
+                                     expected_quantity=revised_order.units, loaded_quantity=0, status="PENDING",
+                                     manifest_version_id=revised_manifest.id, load_sequence=revised_stop.sequence_number))
     for _stop, order in stop_rows:
         order.status = "PLANNED"
     for _deferral, order in deferral_rows:
@@ -389,7 +443,8 @@ def publish_plan(
         actor_id=principal.user.id,
         old_state={"status": "DRAFT"},
         new_state={"status": "PUBLISHED", "version_number": version.version_number,
-                   "served_orders": len(stop_rows), "deferred_orders": len(deferral_rows)},
+                   "served_orders": len(stop_rows), "deferred_orders": len(deferral_rows),
+                   "revises_plan_version_id": str(predecessor.id) if predecessor else None},
         reason=command["reason"],
     ))
     response_data = {

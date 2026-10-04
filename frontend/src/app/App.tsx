@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   ApiError,
+  acknowledgeManifest,
   createDispatcherPlan,
   createStoreOrder,
   currentUser,
@@ -10,13 +11,20 @@ import {
   getOrderEligibility,
   listDispatcherOrders,
   listDispatcherPlans,
+  listLoaderTrips,
+  listManifestVersions,
+  listShortfalls,
   listStoreOrders,
   publishDispatcherPlan,
+  resolveShortfall,
   signIn,
   signOut,
+  submitLoadChecks,
   type DispatcherFilters,
   type DispatcherOrder,
   type DispatcherPlan,
+  type LoaderTrip,
+  type ShortfallItem,
   type OrderEligibility,
   type StoreOrder,
   type TemperatureRequirement,
@@ -174,6 +182,149 @@ function StoreOrders() {
       </div>
     </section>
   )
+}
+
+function LoaderWorkspace() {
+  const [trips, setTrips] = useState<LoaderTrip[]>([])
+  const [manifestHistory, setManifestHistory] = useState<LoaderTrip['manifest'][]>([])
+  const [selected, setSelected] = useState<string>('')
+  const [statuses, setStatuses] = useState<Record<string, string>>({})
+  const [quantities, setQuantities] = useState<Record<string, string>>({})
+  const [notes, setNotes] = useState<Record<string, string>>({})
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [working, setWorking] = useState(false)
+
+  async function refresh() {
+    const items = await listLoaderTrips()
+    setTrips(items)
+    setSelected((current) => current || items[0]?.id || '')
+  }
+  useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load trips.')) }, [])
+  const trip = trips.find((item) => item.id === selected)
+  const selectedTripId = trip?.id
+  const selectedManifestVersion = trip?.manifest.version_number
+  useEffect(() => {
+    if (!selectedTripId) { setManifestHistory([]); return }
+    listManifestVersions(selectedTripId).then(setManifestHistory).catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load manifest history.'))
+  }, [selectedTripId, selectedManifestVersion])
+  const fieldClass = 'mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-50'
+
+  async function saveChecks() {
+    if (!trip) return
+    setWorking(true); setError(''); setNotice('')
+    try {
+      await submitLoadChecks(trip.id, trip.manifest.version_number, trip.manifest.lines.map((line) => ({
+        order_id: line.order_id,
+        status: statuses[line.order_id] ?? (line.status === 'PENDING' ? 'LOADED' : line.status),
+        quantity: Number(quantities[line.order_id] ?? line.expected_quantity),
+        notes: notes[line.order_id] ?? line.notes,
+      })))
+      await refresh(); setNotice('Loading checks saved. Any shortage is now visible to the dispatcher.')
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not save checks.') }
+    finally { setWorking(false) }
+  }
+  async function acknowledge() {
+    if (!trip) return
+    setWorking(true); setError('')
+    try { await acknowledgeManifest(trip.manifest.id); await refresh(); setNotice('Manifest acknowledged; trip readiness has been updated.') }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not acknowledge manifest.') }
+    finally { setWorking(false) }
+  }
+
+  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="loader-heading">
+    <h2 id="loader-heading" className="text-xl font-bold">Loading bay</h2>
+    <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest. Driver assignment is not available yet.</p>
+    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
+      <label className="mt-4 block text-sm">Published trip<select className={fieldClass} value={selected} onChange={(event) => setSelected(event.target.value)}>{trips.map((item) => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
+      {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · Driver unassigned</div>
+        {manifestHistory.length > 1 && <div className="mt-3 rounded-lg border border-cyan-900 p-3"><p className="text-sm font-semibold">Manifest changes</p><ul className="mt-2 space-y-1 text-xs text-slate-300">{manifestHistory.slice(1).map((version, index) => {
+          const previous = manifestHistory[index]
+          const oldByOrder = new Map(previous.lines.map((line) => [line.order_id, line]))
+          const changes = version.lines.flatMap((line) => {
+            const old = oldByOrder.get(line.order_id)
+            if (!old) return [`${line.order_ref} added`]
+            return old.expected_quantity !== line.expected_quantity || old.status !== line.status
+              ? [`${line.order_ref}: ${old.expected_quantity} ${old.status.toLowerCase()} → ${line.expected_quantity} ${line.status.toLowerCase()}`]
+              : []
+          })
+          for (const line of previous.lines) if (!version.lines.some((next) => next.order_id === line.order_id)) changes.push(`${line.order_ref} removed from this trip`)
+          return <li key={version.id}>V{previous.version_number} → V{version.version_number}: {changes.length ? changes.join('; ') : 'no line changes'}</li>
+        })}</ul></div>}
+        <div className="mt-3 space-y-3">{trip.manifest.lines.map((line) => <article key={line.order_id} className="rounded-lg border border-slate-800 p-3">
+          <p className="font-semibold">{line.load_sequence}. {line.order_ref} <span className="font-normal text-slate-400">· {line.outlet_id} · expected {line.expected_quantity}</span></p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <label className="text-xs text-slate-300">Result<select className={fieldClass} value={statuses[line.order_id] ?? (line.status === 'PENDING' ? 'LOADED' : line.status)} onChange={(event) => setStatuses((state) => ({ ...state, [line.order_id]: event.target.value }))}><option>LOADED</option><option>MISSING</option><option>DAMAGED</option><option>SUBSTITUTE</option></select></label>
+            <label className="text-xs text-slate-300">Quantity (loaded, or affected if missing/damaged)<input className={fieldClass} min="0" max={line.expected_quantity} type="number" value={quantities[line.order_id] ?? line.expected_quantity} onChange={(event) => setQuantities((state) => ({ ...state, [line.order_id]: event.target.value }))} /></label>
+            <label className="text-xs text-slate-300">Notes<input className={fieldClass} value={notes[line.order_id] ?? ''} onChange={(event) => setNotes((state) => ({ ...state, [line.order_id]: event.target.value }))} /></label>
+          </div>
+        </article>)}</div>
+        <div className="mt-4 flex flex-wrap gap-3"><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working} onClick={saveChecks}>Save loading checks</button><button className="rounded-lg border border-slate-600 px-4 py-2 disabled:opacity-50" disabled={working || Boolean(trip.manifest.acknowledged_at)} onClick={acknowledge}>Acknowledge current manifest</button></div>
+      </>}
+    </>}
+    {error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}
+  </section>
+}
+
+function ShortfallWorkspace() {
+  const [items, setItems] = useState<ShortfallItem[]>([])
+  const [publishedTrips, setPublishedTrips] = useState<Array<{ id: string; vehicle_id: string; trip_number: number; brand: string; district: string }>>([])
+  const [reasons, setReasons] = useState<Record<string, string>>({})
+  const [actions, setActions] = useState<Record<string, string>>({})
+  const [resolutionQuantities, setResolutionQuantities] = useState<Record<string, string>>({})
+  const [substitutes, setSubstitutes] = useState<Record<string, string>>({})
+  const [targetTrips, setTargetTrips] = useState<Record<string, string>>({})
+  const [candidatePlan, setCandidatePlan] = useState<DispatcherPlan | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [working, setWorking] = useState(false)
+  async function refresh() {
+    const [shortfalls, plans] = await Promise.all([listShortfalls(), listDispatcherPlans()])
+    setItems(shortfalls)
+    setPublishedTrips(plans.filter((plan) => plan.status === 'PUBLISHED').flatMap((plan) => plan.trips.map((trip) => ({
+      id: trip.id, vehicle_id: trip.vehicle_id, trip_number: trip.trip_number, brand: trip.brand, district: trip.district,
+    }))))
+  }
+  useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load shortfalls.')) }, [])
+  async function resolve(item: ShortfallItem) {
+    setWorking(true); setError(''); setNotice('')
+    try {
+      const action = actions[item.id] ?? 'RELOAD_FOUND'
+      const result = await resolveShortfall(item.id, action, reasons[item.id] ?? '', action === 'PARTIAL_FULFILLMENT' ? Number(resolutionQuantities[item.id] ?? 0) : undefined, substitutes[item.id], targetTrips[item.id])
+      if (result.candidate_plan_id) {
+        setCandidatePlan(await getDispatcherPlan(result.candidate_plan_id))
+        await refresh()
+        setNotice('Review the capacity checked replacement plan below, then publish it to finish the reallocation.')
+      } else {
+        await refresh()
+        setNotice(`${item.order_ref} resolved; revised manifest created.`)
+      }
+    }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not resolve this shortfall.') }
+    finally { setWorking(false) }
+  }
+  async function openReallocationPlan(item: ShortfallItem) {
+    if (!item.resolution_plan_version_id) return
+    setWorking(true); setError('')
+    try { setCandidatePlan(await getDispatcherPlan(item.resolution_plan_version_id)) }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not open the replacement plan.') }
+    finally { setWorking(false) }
+  }
+  async function publishReallocation() {
+    if (!candidatePlan) return
+    setWorking(true); setError('')
+    try {
+      await publishDispatcherPlan(candidatePlan.id, crypto.randomUUID(), 'Dispatcher approved capacity checked reallocation')
+      setCandidatePlan(null); await refresh(); setNotice(`Replacement plan V${candidatePlan.version_number} published. Loader manifests are revised and require acknowledgement.`)
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'Could not publish the replacement plan.') }
+    finally { setWorking(false) }
+  }
+  const fieldClass = 'mt-2 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
+  return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="shortfall-heading"><h2 id="shortfall-heading" className="text-xl font-bold">Loading exceptions</h2>
+    {items.length === 0 ? <p className="mt-3 text-sm text-slate-400">No open loading exceptions.</p> : <ul className="mt-3 space-y-3">{items.map((item) => <li key={item.id} className="rounded-lg border border-amber-900 bg-amber-950/30 p-4">
+      <p className="font-semibold">{item.order_ref} · {item.reason.toLowerCase()} · {item.quantity} units · {item.blocking ? 'dispatch hold' : 'nonblocking'}</p>
+      {item.status === 'RESOLUTION_PENDING' ? <button className="mt-3 rounded-lg border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => openReallocationPlan(item)}>Review replacement plan</button> : <div className="mt-3 flex flex-wrap gap-2"><select className={fieldClass} value={actions[item.id] ?? 'RELOAD_FOUND'} onChange={(event) => setActions((state) => ({ ...state, [item.id]: event.target.value }))}><option value="RELOAD_FOUND">Reload found</option><option value="PARTIAL_FULFILLMENT">Accept partial quantity</option><option value="SUBSTITUTE">Substitute</option><option value="DEFER">Defer order</option><option value="REALLOCATION">Move order to another trip</option></select>{actions[item.id] === 'REALLOCATION' && <select aria-label={`Target trip for ${item.order_ref}`} className={fieldClass} value={targetTrips[item.id] ?? ''} onChange={(event) => setTargetTrips((state) => ({ ...state, [item.id]: event.target.value }))}><option value="">Choose compatible trip</option>{publishedTrips.filter((trip) => trip.id !== item.trip_id).map((trip) => <option key={trip.id} value={trip.id}>{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</option>)}</select>}{actions[item.id] === 'PARTIAL_FULFILLMENT' && <input aria-label={`Accepted quantity for ${item.order_ref}`} className={fieldClass} min="0" max={item.quantity} type="number" placeholder="Accepted units" value={resolutionQuantities[item.id] ?? ''} onChange={(event) => setResolutionQuantities((state) => ({ ...state, [item.id]: event.target.value }))} />}{actions[item.id] === 'SUBSTITUTE' && <input aria-label={`Substitute for ${item.order_ref}`} className={fieldClass} placeholder="Substitute reference" value={substitutes[item.id] ?? ''} onChange={(event) => setSubstitutes((state) => ({ ...state, [item.id]: event.target.value }))} />}<input aria-label={`Resolution reason for ${item.order_ref}`} className={`${fieldClass} min-w-56 flex-1`} placeholder="Required reason" value={reasons[item.id] ?? ''} onChange={(event) => setReasons((state) => ({ ...state, [item.id]: event.target.value }))} /><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || !(reasons[item.id] ?? '').trim() || (actions[item.id] === 'REALLOCATION' && !targetTrips[item.id])} onClick={() => resolve(item)}>{actions[item.id] === 'REALLOCATION' ? 'Build replacement plan' : 'Resolve and create V2'}</button></div>}
+    </li>)}</ul>}{candidatePlan && <section className="mt-5 rounded-xl border border-cyan-800 bg-slate-950 p-4" aria-label="Replacement plan review"><h3 className="font-bold">Replacement plan V{candidatePlan.version_number} · {candidatePlan.status}</h3><p className="mt-1 text-sm text-slate-400">The planner checked vehicle capacity, fuel, route grouping, and delivery windows. Review the updated trips before publishing.</p><div className="mt-3 space-y-2">{candidatePlan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-3 text-sm" key={trip.id}><p className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</p><p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg · {trip.metrics.volume_m3} m³ · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p><ol className="mt-2 list-inside list-decimal">{trip.stops.map((stop) => <li key={stop.order_id}>{stop.order_ref} · {stop.outlet_id}</li>)}</ol></article>)}</div><div className="mt-4 flex gap-2"><button className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || candidatePlan.status !== 'DRAFT' || candidatePlan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishReallocation}>{working ? 'Publishing…' : 'Publish replacement plan'}</button><button className="rounded-lg border border-slate-700 px-4 py-2" disabled={working} onClick={() => setCandidatePlan(null)}>Close review</button></div></section>}{error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}</section>
 }
 
 function DispatcherWorkspace() {
@@ -463,7 +614,7 @@ function App() {
               <dd className="mt-1 font-semibold">{scope}</dd>
             </div>
           </dl>
-          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <DispatcherWorkspace /> : (
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : (
             <p className="mt-8 rounded-lg bg-slate-800/70 p-4 text-sm text-slate-300">
               You are signed in. Available workflows will appear here as they are implemented for your role.
             </p>
