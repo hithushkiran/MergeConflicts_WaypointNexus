@@ -315,6 +315,8 @@ export function getAccessToken(): string | null {
   return typeof window === 'undefined' ? null : window.sessionStorage.getItem(TOKEN_KEY)
 }
 
+export const AUTHENTICATION_EXPIRED_EVENT = 'waypoint-authentication-expired'
+
 export function getCachedDriverProfile(): UserProfile | null {
   if (typeof window === 'undefined') return null
   try {
@@ -343,7 +345,13 @@ async function request<T>(path: string, init: RequestInit = {}, authenticated = 
   const body = (await response.json()) as T | ApiErrorBody
   if (!response.ok) {
     const error = new ApiError(response.status, body as ApiErrorBody)
-    if (error.status === 401 && error.code !== 'INVALID_CREDENTIALS') clearAccessToken()
+    if (authenticated && error.status === 401) {
+      // A delayed response from an old session must not clear a newer login.
+      if (getAccessToken() === token) {
+        clearAccessToken()
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event(AUTHENTICATION_EXPIRED_EVENT))
+      }
+    }
     throw error
   }
   return body as T
@@ -357,6 +365,7 @@ export async function signIn(email: string, password: string): Promise<UserProfi
   )
   window.sessionStorage.setItem(TOKEN_KEY, result.access_token)
   if (result.user.role === 'DRIVER') window.localStorage.setItem(PROFILE_KEY, JSON.stringify(result.user))
+  else window.localStorage.removeItem(PROFILE_KEY)
   return result.user
 }
 

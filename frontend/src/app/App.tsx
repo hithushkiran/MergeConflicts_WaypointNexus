@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import StoreReceipts from './StoreReceipts'
 import DeliveryIssues from './DeliveryIssues'
 
 import {
   ApiError,
+  AUTHENTICATION_EXPIRED_EVENT,
   acknowledgeManifest,
   assignTripDriver,
   createDispatcherPlan,
@@ -62,6 +63,7 @@ function StoreOrders() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   async function refreshOrders() {
     setOrders(await listStoreOrders())
@@ -69,6 +71,8 @@ function StoreOrders() {
 
   useEffect(() => {
     let active = true
+    setLoading(true)
+    setError('')
     Promise.all([getOrderEligibility(), listStoreOrders()])
       .then(([timing, storeOrders]) => {
         if (!active) return
@@ -86,7 +90,7 @@ function StoreOrders() {
     return () => {
       active = false
     }
-  }, [])
+  }, [loadAttempt])
 
   async function handleCreateOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -118,6 +122,7 @@ function StoreOrders() {
   return (
     <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="store-orders-heading">
       <h2 id="store-orders-heading" className="text-xl font-bold">Store orders</h2>
+      <button className="mt-3 rounded-lg border border-slate-600 px-4 py-2" type="button" disabled={loading || submitting} onClick={() => setLoadAttempt(attempt => attempt + 1)}>Refresh orders</button>
       <p className="mt-2 text-sm text-slate-400">Create a delivery request and track its current status.</p>
 
       {eligibility && (
@@ -206,6 +211,7 @@ function StoreOrders() {
 function LoaderWorkspace() {
   const [trips, setTrips] = useState<LoaderTrip[]>([])
   const [manifestHistory, setManifestHistory] = useState<LoaderTrip['manifest'][]>([])
+  const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<string>('')
   const [statuses, setStatuses] = useState<Record<string, string>>({})
   const [quantities, setQuantities] = useState<Record<string, string>>({})
@@ -215,9 +221,12 @@ function LoaderWorkspace() {
   const [working, setWorking] = useState(false)
 
   async function refresh() {
-    const items = await listLoaderTrips()
-    setTrips(items)
-    setSelected((current) => current || items[0]?.id || '')
+    setLoading(true); setError('')
+    try {
+      const items = await listLoaderTrips()
+      setTrips(items)
+      setSelected((current) => current || items[0]?.id || '')
+    } finally { setLoading(false) }
   }
   useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load trips.')) }, [])
   const trip = trips.find((item) => item.id === selected)
@@ -253,10 +262,11 @@ function LoaderWorkspace() {
 
   return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="loader-heading">
     <h2 id="loader-heading" className="text-xl font-bold">Loading bay</h2>
+    <button className="mt-3 rounded-lg border border-slate-600 px-4 py-2" type="button" disabled={loading || working} onClick={() => { void refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load trips.')) }}>Refresh loading bay</button>
     <p className="mt-2 text-sm text-slate-400">Check each order against the current manifest, then acknowledge the version drivers may use.</p>
-    {trips.length === 0 ? <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
+    {loading ? <p role="status" className="mt-4">Loading trips…</p> : trips.length === 0 ? !error && <p className="mt-4 rounded-lg bg-slate-800 p-4 text-sm">No published trips are available for this depot.</p> : <>
       <label className="mt-4 block text-sm">Published trip<select className={fieldClass} value={selected} onChange={(event) => setSelected(event.target.value)}>{trips.map((item) => <option key={item.id} value={item.id}>{item.vehicle_id} · Trip {item.trip_number} · {item.status} · Plan V{item.plan_version}</option>)}</select></label>
-      {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · Driver unassigned</div>
+      {trip && <><div className="mt-3 rounded-lg bg-slate-800 p-3 text-sm">Manifest V{trip.manifest.version_number} · {trip.status} · {trip.driver ? `Driver ${trip.driver}` : 'Driver details unavailable'}</div>
         {manifestHistory.length > 1 && <div className="mt-3 rounded-lg border border-cyan-900 p-3"><p className="text-sm font-semibold">Manifest changes</p><ul className="mt-2 space-y-1 text-xs text-slate-300">{manifestHistory.slice(1).map((version, index) => {
           const previous = manifestHistory[index]
           const oldByOrder = new Map(previous.lines.map((line) => [line.order_id, line]))
@@ -285,8 +295,7 @@ function LoaderWorkspace() {
   </section>
 }
 
-function DriverWorkspace() {
-  const [user] = useState<UserProfile | null>(() => getCachedDriverProfile())
+function DriverWorkspace({ user }: { user: UserProfile }) {
   const [trips, setTrips] = useState<DriverTrip[]>([])
   const [receiver, setReceiver] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
@@ -296,6 +305,8 @@ function DriverWorkspace() {
   const [serverConnected, setServerConnected] = useState(true)
   const [outbox, setOutbox] = useState<QueuedDriverCommand[]>([])
   const [syncing, setSyncing] = useState(false)
+  const retryTimer = useRef<number | null>(null)
+  const mounted = useRef(false)
   const userId = user?.id
 
   const refresh = useCallback(async () => {
@@ -317,6 +328,7 @@ function DriverWorkspace() {
     const conflict = queued.find((entry) => entry.state === 'CONFLICT')
     const transientFailure = queued.find((entry) => entry.state === 'PENDING' && entry.error)
     if (conflict) setError(`A delivery update needs attention: ${conflict.error ?? 'the server could not accept the change.'}`)
+    else if (queued.some((entry) => entry.state === 'AUTH_REQUIRED')) setError('Sign in again with the same driver account to sync saved updates.')
     else if (transientFailure) setError(`A connection issue delayed sync. The update will retry automatically: ${transientFailure.error}`)
     else if (hadNetworkError && freshTrips.length === 0) setError('No saved trips are available offline. Open your assigned trips while connected to save them for offline use.')
     else if (!hadNetworkError) setError('')
@@ -333,8 +345,9 @@ function DriverWorkspace() {
         setError(`A delivery update needs attention: ${conflict?.error ?? 'the server could not accept the change.'}`)
       } else if (result.pending.length === 0) setError('')
       await refresh()
-      if (result.next_attempt_at && navigator.onLine) {
-        window.setTimeout(() => { void sync() }, Math.max(500, result.next_attempt_at - Date.now()))
+      if (result.next_attempt_at && navigator.onLine && mounted.current) {
+        if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
+        retryTimer.current = window.setTimeout(() => { void sync() }, Math.max(500, result.next_attempt_at - Date.now()))
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Offline updates could not be saved.')
@@ -342,6 +355,7 @@ function DriverWorkspace() {
   }, [refresh, userId])
 
   useEffect(() => {
+    mounted.current = true
     void refresh().then(() => { if (navigator.onLine) void sync() }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not open saved trips.'))
     const update = () => {
       setOnline(navigator.onLine)
@@ -349,7 +363,12 @@ function DriverWorkspace() {
     }
     window.addEventListener('online', update)
     window.addEventListener('offline', update)
-    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+    return () => {
+      mounted.current = false
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
   }, [refresh, sync, userId])
 
   async function queue(command: DriverCommandInput) {
@@ -403,15 +422,19 @@ function ShortfallWorkspace() {
   const [substitutes, setSubstitutes] = useState<Record<string, string>>({})
   const [targetTrips, setTargetTrips] = useState<Record<string, string>>({})
   const [candidatePlan, setCandidatePlan] = useState<DispatcherPlan | null>(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
   async function refresh() {
+    setLoading(true); setError('')
+    try {
     const [shortfalls, plans] = await Promise.all([listShortfalls(), listDispatcherPlans()])
     setItems(shortfalls)
     setPublishedTrips(plans.filter((plan) => plan.status === 'PUBLISHED').flatMap((plan) => plan.trips.map((trip) => ({
       id: trip.id, vehicle_id: trip.vehicle_id, trip_number: trip.trip_number, brand: trip.brand, district: trip.district,
     }))))
+    } finally { setLoading(false) }
   }
   useEffect(() => { refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load shortfalls.')) }, [])
   async function resolve(item: ShortfallItem) {
@@ -449,9 +472,11 @@ function ShortfallWorkspace() {
   }
   const fieldClass = 'mt-2 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50'
   return <section className="mt-8 border-t border-slate-800 pt-6" aria-labelledby="shortfall-heading"><h2 id="shortfall-heading" className="text-xl font-bold">Loading exceptions</h2>
-    {items.length === 0 ? <p className="mt-3 text-sm text-slate-400">No open loading exceptions.</p> : <ul className="mt-3 space-y-3">{items.map((item) => <li key={item.id} className="rounded-lg border border-amber-900 bg-amber-950/30 p-4">
+    <button className="mt-3 rounded-lg border border-slate-600 px-4 py-2" type="button" disabled={loading || working} onClick={() => { void refresh().catch((cause: unknown) => setError(cause instanceof ApiError ? cause.message : 'Could not load shortfalls.')) }}>Refresh exceptions</button>
+    {loading && <p role="status" className="mt-3">Loading exceptions…</p>}
+    {items.length === 0 ? !loading && !error && <p className="mt-3 text-sm text-slate-400">No open loading exceptions.</p> : <ul className="mt-3 space-y-3">{items.map((item) => <li key={item.id} className="rounded-lg border border-amber-900 bg-amber-950/30 p-4">
       <p className="font-semibold">{item.order_ref} · {item.reason.toLowerCase()} · {item.quantity} units · {item.blocking ? 'dispatch hold' : 'nonblocking'}</p>
-      {item.status === 'RESOLUTION_PENDING' ? <button className="mt-3 rounded-lg border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => openReallocationPlan(item)}>Review replacement plan</button> : <div className="mt-3 flex flex-wrap gap-2"><select className={fieldClass} value={actions[item.id] ?? 'RELOAD_FOUND'} onChange={(event) => setActions((state) => ({ ...state, [item.id]: event.target.value }))}><option value="RELOAD_FOUND">Reload found</option><option value="PARTIAL_FULFILLMENT">Accept partial quantity</option><option value="SUBSTITUTE">Substitute</option><option value="DEFER">Defer order</option><option value="REALLOCATION">Move order to another trip</option></select>{actions[item.id] === 'REALLOCATION' && <select aria-label={`Target trip for ${item.order_ref}`} className={fieldClass} value={targetTrips[item.id] ?? ''} onChange={(event) => setTargetTrips((state) => ({ ...state, [item.id]: event.target.value }))}><option value="">Choose compatible trip</option>{publishedTrips.filter((trip) => trip.id !== item.trip_id).map((trip) => <option key={trip.id} value={trip.id}>{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</option>)}</select>}{actions[item.id] === 'PARTIAL_FULFILLMENT' && <input aria-label={`Accepted quantity for ${item.order_ref}`} className={fieldClass} min="0" max={item.quantity} type="number" placeholder="Accepted units" value={resolutionQuantities[item.id] ?? ''} onChange={(event) => setResolutionQuantities((state) => ({ ...state, [item.id]: event.target.value }))} />}{actions[item.id] === 'SUBSTITUTE' && <input aria-label={`Substitute for ${item.order_ref}`} className={fieldClass} placeholder="Substitute reference" value={substitutes[item.id] ?? ''} onChange={(event) => setSubstitutes((state) => ({ ...state, [item.id]: event.target.value }))} />}<input aria-label={`Resolution reason for ${item.order_ref}`} className={`${fieldClass} min-w-56 flex-1`} placeholder="Required reason" value={reasons[item.id] ?? ''} onChange={(event) => setReasons((state) => ({ ...state, [item.id]: event.target.value }))} /><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || !(reasons[item.id] ?? '').trim() || (actions[item.id] === 'REALLOCATION' && !targetTrips[item.id])} onClick={() => resolve(item)}>{actions[item.id] === 'REALLOCATION' ? 'Build replacement plan' : 'Resolve and create V2'}</button></div>}
+      {item.status === 'RESOLUTION_PENDING' ? <button className="mt-3 rounded-lg border border-cyan-700 px-3 py-2 text-sm" disabled={working} onClick={() => openReallocationPlan(item)}>Review replacement plan</button> : <div className="mt-3 flex flex-wrap gap-2"><select aria-label={`Resolution action for ${item.order_ref}`} className={fieldClass} value={actions[item.id] ?? 'RELOAD_FOUND'} onChange={(event) => setActions((state) => ({ ...state, [item.id]: event.target.value }))}><option value="RELOAD_FOUND">Reload found</option><option value="PARTIAL_FULFILLMENT">Accept partial quantity</option><option value="SUBSTITUTE">Substitute</option><option value="DEFER">Defer order</option><option value="REALLOCATION">Move order to another trip</option></select>{actions[item.id] === 'REALLOCATION' && <select aria-label={`Target trip for ${item.order_ref}`} className={fieldClass} value={targetTrips[item.id] ?? ''} onChange={(event) => setTargetTrips((state) => ({ ...state, [item.id]: event.target.value }))}><option value="">Choose compatible trip</option>{publishedTrips.filter((trip) => trip.id !== item.trip_id).map((trip) => <option key={trip.id} value={trip.id}>{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</option>)}</select>}{actions[item.id] === 'PARTIAL_FULFILLMENT' && <input aria-label={`Accepted quantity for ${item.order_ref}`} className={fieldClass} min="0" max={item.quantity} type="number" placeholder="Accepted units" value={resolutionQuantities[item.id] ?? ''} onChange={(event) => setResolutionQuantities((state) => ({ ...state, [item.id]: event.target.value }))} />}{actions[item.id] === 'SUBSTITUTE' && <input aria-label={`Substitute for ${item.order_ref}`} className={fieldClass} placeholder="Substitute reference" value={substitutes[item.id] ?? ''} onChange={(event) => setSubstitutes((state) => ({ ...state, [item.id]: event.target.value }))} />}<input aria-label={`Resolution reason for ${item.order_ref}`} className={`${fieldClass} min-w-56 flex-1`} placeholder="Required reason" value={reasons[item.id] ?? ''} onChange={(event) => setReasons((state) => ({ ...state, [item.id]: event.target.value }))} /><button className="rounded-lg bg-cyan-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || !(reasons[item.id] ?? '').trim() || (actions[item.id] === 'REALLOCATION' && !targetTrips[item.id])} onClick={() => resolve(item)}>{actions[item.id] === 'REALLOCATION' ? 'Build replacement plan' : 'Resolve and create V2'}</button></div>}
     </li>)}</ul>}{candidatePlan && <section className="mt-5 rounded-xl border border-cyan-800 bg-slate-950 p-4" aria-label="Replacement plan review"><h3 className="font-bold">Replacement plan V{candidatePlan.version_number} · {candidatePlan.status}</h3><p className="mt-1 text-sm text-slate-400">The planner checked vehicle capacity, fuel, route grouping, and delivery windows. Review the updated trips before publishing.</p><div className="mt-3 space-y-2">{candidatePlan.trips.map((trip) => <article className="rounded-lg border border-slate-800 p-3 text-sm" key={trip.id}><p className="font-semibold">{trip.vehicle_id} · Trip {trip.trip_number} · {trip.brand} / {trip.district}</p><p className="mt-1 text-xs text-slate-400">{trip.metrics.weight_kg} kg · {trip.metrics.volume_m3} m³ · {trip.metrics.fuel_liters} L · {trip.metrics.duration_minutes} min</p><ol className="mt-2 list-inside list-decimal">{trip.stops.map((stop) => <li key={stop.order_id}>{stop.order_ref} · {stop.outlet_id}</li>)}</ol></article>)}</div><div className="mt-4 flex gap-2"><button className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-slate-950 disabled:opacity-50" disabled={working || candidatePlan.status !== 'DRAFT' || candidatePlan.trips.some((trip) => trip.metrics.time_windows_valid !== true)} onClick={publishReallocation}>{working ? 'Publishing…' : 'Publish replacement plan'}</button><button className="rounded-lg border border-slate-700 px-4 py-2" disabled={working} onClick={() => setCandidatePlan(null)}>Close review</button></div></section>}{error && <p role="alert" className="mt-3 text-sm text-rose-300">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}</section>
 }
 
@@ -720,13 +745,13 @@ function AppShell({
           {navigation.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
         </div>
       </nav>
-      <main id="workspace-content" className="workspace-main">
+      <main id="workspace-content" className="workspace-main" tabIndex={-1}>
         <div className="workspace-intro">
           <div>
             <p className="eyebrow">{user.role} workspace</p>
             <h1>{user.role === 'STORE' ? 'Manage your deliveries' : user.role === 'DISPATCHER' ? 'Coordinate today’s network' : user.role === 'LOADER' ? 'Prepare the outbound route' : 'Complete your delivery route'}</h1>
           </div>
-          <p className="workspace-intro__hint">Live status is sourced from Waypoint Nexus APIs.</p>
+          <p className="workspace-intro__hint">Server status updates on refresh. Offline driver changes wait for sync.</p>
         </div>
         <div className="workspace-content">{children}</div>
       </main>
@@ -743,7 +768,20 @@ function App() {
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    if (!getAccessToken()) return
+    const expired = () => {
+      setUser(null)
+      setPassword('')
+      setError('Your session expired. Sign in again with the same account. Saved driver updates remain on this device.')
+    }
+    window.addEventListener(AUTHENTICATION_EXPIRED_EVENT, expired)
+    return () => window.removeEventListener(AUTHENTICATION_EXPIRED_EVENT, expired)
+  }, [])
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      if (!navigator.onLine) setUser(getCachedDriverProfile())
+      return
+    }
 
     let active = true
       currentUser()
@@ -800,7 +838,7 @@ function App() {
     const scope = user.outlet_id ? `Outlet ${user.outlet_id}` : user.depot_code ? `Depot ${user.depot_code}` : 'All operations'
     return (
       <AppShell user={user} scope={scope} onSignOut={() => void handleSignOut()}>
-          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /><DeliveryIssues /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace />}
+          {user.role === 'STORE' ? <StoreOrders /> : user.role === 'DISPATCHER' ? <><DispatcherWorkspace /><ShortfallWorkspace /><DeliveryIssues /></> : user.role === 'LOADER' ? <LoaderWorkspace /> : <DriverWorkspace key={user.id} user={user} />}
           {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
       </AppShell>
     )

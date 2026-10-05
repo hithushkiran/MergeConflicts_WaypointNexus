@@ -191,7 +191,7 @@ textarea {
 .workspace-intro__hint {
   max-width: 18rem;
   margin: 0;
-  color: #64748b;
+  color: #526477;
   font-size: 0.8rem;
   text-align: right;
 }
@@ -200,7 +200,35 @@ textarea {
   margin-top: 1.5rem;
 }
 
+/* Core workspaces still use the established dark workflow palette. */
+.workspace-content > section {
+  border-radius: 0.75rem;
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.workspace-content input,
+.workspace-content select,
+.workspace-content textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.account-context {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-bar > :not(.account-context) {
+  flex-shrink: 0;
+}
+
 @media (max-width: 640px) {
+  .workspace-content > section {
+    padding: 1rem;
+  }
   .app-header__inner {
     align-items: flex-start;
     flex-direction: column;

@@ -1,0 +1,13 @@
+# Add after compose.yaml and tests/golden-path/compose.yaml in a fresh checkout.
+# Use a NEW project name: never reuse/reset the existing acceptance DB volume.
+services:
+  db:
+    ports: !override ["5435:5432"]
+  api:
+    environment:
+      CORS_ORIGINS: http://localhost:5175
+    ports: !override ["8002:8000"]
+  web:
+    environment:
+      VITE_API_URL: http://localhost:8002
+    ports: !override ["5175:5173"]

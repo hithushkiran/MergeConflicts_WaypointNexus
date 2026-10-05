@@ -1,4 +1,4 @@
-const CACHE_NAME = 'waypoint-shell-v2'
+const CACHE_NAME = 'waypoint-shell-v3'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.add('/')))

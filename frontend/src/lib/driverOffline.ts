@@ -3,6 +3,8 @@ import {
   arriveDriverStop,
   completeDriverStop,
   departDriverTrip,
+  currentUser,
+  getAccessToken,
   type DriverTrip,
 } from './api'
 
@@ -10,6 +12,9 @@ const DATABASE_NAME = 'waypoint-driver-offline'
 const DATABASE_VERSION = 1
 const CACHE_SCHEMA_VERSION = 1
 const MAX_RETRY_MS = 60_000
+// Earlier clients stored only the API message when incorrectly blocking auth.
+// Recover only the two exact identity-contract messages; preserve other conflicts.
+const LEGACY_AUTH_ERRORS = new Set(['The bearer token is invalid or expired.', 'A bearer token is required.'])
 
 export type DriverCommandInput =
   | { kind: 'DEPART'; trip_id: string }
@@ -29,7 +34,7 @@ export interface QueuedDriverCommand {
   created_at: number
   attempts: number
   next_attempt_at: number
-  state: 'PENDING' | 'CONFLICT'
+  state: 'PENDING' | 'AUTH_REQUIRED' | 'CONFLICT'
   error: string | null
 }
 
@@ -138,10 +143,14 @@ export async function enqueueDriverCommand(userId: string, command: DriverComman
     database.close()
     throw new Error('This trip is not saved for offline use. Open it while connected before recording offline work.')
   }
+  const existing = await requestResult(transaction.objectStore('outbox').index('user_id').getAll(userId)) as QueuedDriverCommand[]
   const now = Date.now()
+  // IndexedDB returns equal timestamps in UUID-key order. Allocate a persisted,
+  // monotonic queue position inside this transaction, even if the clock moves back.
+  const createdAt = existing.reduce((position, entry) => Math.max(position, entry.created_at + 1), now)
   const queued: QueuedDriverCommand = {
     id: crypto.randomUUID(), idempotency_key: crypto.randomUUID(), user_id: userId,
-    command: { ...command, occurred_at: new Date(now).toISOString() } as DriverCommand, created_at: now, attempts: 0, next_attempt_at: now, state: 'PENDING', error: null,
+    command: { ...command, occurred_at: new Date(now).toISOString() } as DriverCommand, created_at: createdAt, attempts: 0, next_attempt_at: now, state: 'PENDING', error: null,
   }
   tripStore.put({ ...cached, saved_at: now, trip: applyCommand(cached.trip, queued.command) } satisfies CachedTrip)
   transaction.objectStore('outbox').add(queued)
@@ -182,25 +191,46 @@ async function deleteOutbox(id: string): Promise<void> {
   database.close()
 }
 
-let activeSync: Promise<{ pending: QueuedDriverCommand[]; next_attempt_at: number | null }> | null = null
+type SyncResult = { pending: QueuedDriverCommand[]; next_attempt_at: number | null; authentication_required: boolean }
+const activeSync = new Map<string, Promise<SyncResult>>()
 
-export function syncDriverOutbox(userId: string): Promise<{ pending: QueuedDriverCommand[]; next_attempt_at: number | null }> {
-  if (activeSync) return activeSync
-  activeSync = (async () => {
+export function syncDriverOutbox(userId: string): Promise<SyncResult> {
+  const running = activeSync.get(userId)
+  if (running) return running
+  const syncing = (async () => {
     let queue = await readDriverOutbox(userId)
+    for (const entry of queue) {
+      if (entry.state === 'CONFLICT' && entry.error && LEGACY_AUTH_ERRORS.has(entry.error)) {
+        entry.state = 'AUTH_REQUIRED'
+        await updateOutbox(entry)
+      }
+    }
+    let authenticationRequired = false
+    const token = getAccessToken()
     for (const entry of queue) {
       if (entry.state === 'CONFLICT') break
       if (!navigator.onLine) break
       if (entry.next_attempt_at > Date.now()) break
       try {
+        // A cached profile is never authority to replay another driver's work.
+        const profile = await currentUser()
+        if (profile.id !== userId || profile.role !== 'DRIVER' || getAccessToken() !== token) {
+          authenticationRequired = true
+          break
+        }
         await execute(entry)
         await deleteOutbox(entry.id)
       } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          await updateOutbox({ ...entry, state: 'AUTH_REQUIRED', error: 'Sign in again with the same driver account to sync saved updates.' })
+          authenticationRequired = true
+          break
+        }
         const transient = !(error instanceof ApiError) || error.status >= 500
         if (transient) {
           const attempts = entry.attempts + 1
           const delay = Math.min(1000 * (2 ** Math.min(attempts, 6)), MAX_RETRY_MS)
-          await updateOutbox({ ...entry, attempts, next_attempt_at: Date.now() + delay, error: error instanceof Error ? error.message : 'The delivery update will retry.' })
+          await updateOutbox({ ...entry, state: 'PENDING', attempts, next_attempt_at: Date.now() + delay, error: error instanceof Error ? error.message : 'The delivery update will retry.' })
         } else {
           await updateOutbox({ ...entry, state: 'CONFLICT', error: error.message })
         }
@@ -210,7 +240,8 @@ export function syncDriverOutbox(userId: string): Promise<{ pending: QueuedDrive
     queue = await readDriverOutbox(userId)
     const pending = queue.filter((entry) => entry.state === 'PENDING')
     const hasConflict = queue.some((entry) => entry.state === 'CONFLICT')
-    return { pending: queue, next_attempt_at: !hasConflict && pending.length ? Math.min(...pending.map((entry) => entry.next_attempt_at)) : null }
-  })().finally(() => { activeSync = null })
-  return activeSync
+    return { pending: queue, authentication_required: authenticationRequired, next_attempt_at: !authenticationRequired && !hasConflict && pending.length ? Math.min(...pending.map((entry) => entry.next_attempt_at)) : null }
+  })().finally(() => { activeSync.delete(userId) })
+  activeSync.set(userId, syncing)
+  return syncing
 }

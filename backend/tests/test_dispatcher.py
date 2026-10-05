@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from importlib.util import find_spec
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -10,9 +10,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.database import get_db_session
-from app.infrastructure.persistence import AuditEvent, Base, Deferral, DeliveryEvent, Depot, IdempotencyRecord, ManifestVersion, Order, Outlet, PlanVersion, ProofOfDelivery, Role, Shortfall, Trip, User, Vehicle
+from app.infrastructure.persistence import AuthSession, AuditEvent, Base, Deferral, DeliveryEvent, Depot, IdempotencyRecord, ManifestVersion, Order, Outlet, PlanVersion, ProofOfDelivery, Role, Shortfall, Trip, User, Vehicle
 from app.main import app
-from app.modules.identity.security import hash_password
+from app.modules.identity.security import hash_bearer_token, hash_password
 from app.modules.planning.reference_data import load_planning_reference_data
 
 
@@ -224,7 +224,8 @@ def test_loader_shortfall_hold_resolution_revision_and_acknowledgement(dispatche
         assert session.scalar(select(ManifestVersion).where(ManifestVersion.trip_id == UUID(trip["id"]), ManifestVersion.version_number == 2)) is not None
 
 
-def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatcher_factory):
+@pytest.mark.parametrize('expire_before_completion', [False, True])
+def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatcher_factory, expire_before_completion):
     client, factory = dispatcher_factory
     dispatcher = auth(client)
     loader = auth(client, "loader@test.local")
@@ -246,6 +247,21 @@ def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatc
     assert client.post(f"/api/v1/loader/manifests/{manifest['id']}/acknowledge", headers=loader).status_code == 200
     my_trip = client.get("/api/v1/driver/trips", headers=driver).json()["items"][0]
     assert my_trip["manifest_version"] == manifest["version_number"]
+    with factory() as session:
+        driver_role = session.scalar(select(Role).where(Role.code == 'DRIVER'))
+        loader_role = session.scalar(select(Role).where(Role.code == 'LOADER'))
+        session.add_all([
+            User(email='other.driver@test.local', display_name='Other driver', active=True,
+                 role_id=driver_role.id, depot_code='Peliyagoda', password_hash=hash_password('test-password')),
+            User(email='other.loader@test.local', display_name='Other depot loader', active=True,
+                 role_id=loader_role.id, depot_code='Kandy', password_hash=hash_password('test-password')),
+        ])
+        session.commit()
+    other_driver = auth(client, 'other.driver@test.local')
+    other_loader = auth(client, 'other.loader@test.local')
+    assert client.get('/api/v1/driver/trips', headers=other_driver).json()['items'] == []
+    assert client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**other_driver, 'Idempotency-Key': 'wrong-owner'}).status_code == 404
+    assert client.get(f"/api/v1/loader/trips/{trip['id']}/manifest", headers=other_loader).status_code == 404
     departed = client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver, "Idempotency-Key": "trip-start"})
     assert departed.status_code == 200, departed.text
     assert client.post(f"/api/v1/driver/trips/{trip['id']}/depart", headers={**driver, "Idempotency-Key": "trip-start"}).json()["replayed"] is True
@@ -255,6 +271,19 @@ def test_driver_trip_requires_acknowledged_manifest_and_records_delivery(dispatc
         assert arrived.status_code == 200, arrived.text
         command_headers = {**driver, "Idempotency-Key": f"complete-{index}", "X-Command-Id": f"offline-command-{index}"}
         completion_payload = {"outcome": "DELIVERED", "receiver_name": "Receiving team", "notes": "Left at receiving bay", "occurred_at": "2026-03-16T12:40:00Z"}
+        if index == 0 and expire_before_completion:
+            token = driver['Authorization'].removeprefix('Bearer ')
+            with factory() as session:
+                auth_session = session.scalar(select(AuthSession).where(AuthSession.token_hash == hash_bearer_token(token)))
+                auth_session.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.commit()
+            rejected = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers=command_headers, json=completion_payload)
+            assert rejected.status_code == 401 and rejected.json()['detail']['code'] == 'INVALID_TOKEN'
+            with factory() as session:
+                assert session.scalar(select(ProofOfDelivery)) is None
+                assert session.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key == 'complete-0')) is None
+            driver = auth(client, 'driver@test.local')
+            command_headers = {**command_headers, **driver}
         completed = client.post(f"/api/v1/driver/stops/{stop['id']}/complete", headers=command_headers, json=completion_payload)
         assert completed.status_code == 200, completed.text
         if index == 0:

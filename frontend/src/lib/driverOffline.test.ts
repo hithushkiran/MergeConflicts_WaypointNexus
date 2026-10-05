@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest'
 
 import { afterEach, beforeEach, vi } from 'vitest'
 import { applyPendingCommands, cacheDriverTrips, enqueueDriverCommand, readCachedDriverTrips, readDriverOutbox, saveDeliveryDraft, syncDriverOutbox, type DriverCommandInput, type QueuedDriverCommand } from './driverOffline'
-import type { DriverTrip } from './api'
+import { ApiError, currentUser, type DriverTrip } from './api'
+
+vi.mock('./api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api')>(),
+  currentUser: vi.fn(),
+}))
 
 const trip: DriverTrip = {
   id: 'trip-1', vehicle_id: 'VH-1', vehicle_type: 'VAN', depot_code: 'Peliyagoda', driver_name: 'Test Driver',
@@ -37,9 +42,43 @@ describe('offline driver command overlay', () => {
       deletion.onerror = () => reject(deletion.error)
     })
     vi.stubGlobal('navigator', { onLine: true })
+    vi.mocked(currentUser).mockReset().mockResolvedValue({ id: 'driver-1', role: 'DRIVER', email: 'driver@example.test', display_name: 'Driver', outlet_id: null, depot_code: 'Peliyagoda' })
   })
 
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('preserves enqueue order when commands share a millisecond or the clock moves backwards', async () => {
+    await cacheDriverTrips('driver-1', [trip])
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100_000)
+    const first = await enqueueDriverCommand('driver-1', { kind: 'DEPART', trip_id: trip.id })
+    const second = await enqueueDriverCommand('driver-1', { kind: 'ARRIVE', trip_id: trip.id, stop_id: 'stop-1' })
+    now.mockReturnValue(99_000)
+    const third = await enqueueDriverCommand('driver-1', { kind: 'COMPLETE', trip_id: trip.id, stop_id: 'stop-1', outcome: 'DELIVERED', receiver_name: 'Receiver', notes: '' })
+    expect((await readDriverOutbox('driver-1')).map(entry => entry.id)).toEqual([first.id, second.id, third.id])
+    expect([first.created_at, second.created_at, third.created_at]).toEqual([100_000, 100_001, 100_002])
+    expect(third.command.occurred_at).toBe(new Date(99_000).toISOString())
+  })
+
+  it('recovers a legacy authentication conflict without altering the saved command', async () => {
+    await cacheDriverTrips('driver-1', [trip])
+    const entry = await enqueueDriverCommand('driver-1', { kind: 'DEPART', trip_id: trip.id })
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const opening = indexedDB.open('waypoint-driver-offline', 1)
+      opening.onsuccess = () => resolve(opening.result)
+    })
+    const transaction = db.transaction('outbox', 'readwrite')
+    transaction.objectStore('outbox').put({ ...entry, state: 'CONFLICT', error: 'The bearer token is invalid or expired.' })
+    await new Promise<void>((resolve) => { transaction.oncomplete = () => resolve() })
+    db.close()
+    const bodies: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input) bodies.push(String(init?.body))
+      return new Response('{}', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect((await syncDriverOutbox('driver-1')).pending).toEqual([])
+    expect(JSON.parse(bodies[0]).occurred_at).toBe(entry.command.occurred_at)
+  })
 
   it('persists trips, drafts, and commands and syncs each command once with stable IDs', async () => {
     await cacheDriverTrips('driver-1', [trip])
@@ -124,5 +163,38 @@ describe('offline driver command overlay', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(result.pending.map((entry) => entry.state)).toEqual(['CONFLICT', 'PENDING'])
     expect(result.next_attempt_at).toBeNull()
+  })
+
+  it('preserves expired-auth work and resumes in order after re-authentication with stable IDs and times', async () => {
+    await cacheDriverTrips('driver-1', [trip])
+    const first = await enqueueDriverCommand('driver-1', { kind: 'DEPART', trip_id: trip.id })
+    await enqueueDriverCommand('driver-1', { kind: 'ARRIVE', trip_id: trip.id, stop_id: 'stop-1' })
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'INVALID_TOKEN', message: 'Expired' } }), { status: 401 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const paused = await syncDriverOutbox('driver-1')
+    expect(paused.authentication_required).toBe(true)
+    expect(paused.next_attempt_at).toBeNull()
+    expect((await readDriverOutbox('driver-1')).map((entry) => entry.state)).toEqual(['AUTH_REQUIRED', 'PENDING'])
+    expect(paused.pending[0]).toMatchObject({ id: first.id, idempotency_key: first.idempotency_key, command: first.command, attempts: 0 })
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 200 }))
+    const resumed = await syncDriverOutbox('driver-1')
+    expect(resumed.pending).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('X-Command-Id')).toBe(first.id)
+    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Idempotency-Key')).toBe(first.idempotency_key)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).occurred_at).toBe(first.command.occurred_at)
+  })
+
+  it('pauses before replay when session validation expires and never replays another account\'s queue', async () => {
+    await cacheDriverTrips('driver-1', [trip])
+    const first = await enqueueDriverCommand('driver-1', { kind: 'DEPART', trip_id: trip.id })
+    vi.mocked(currentUser).mockRejectedValueOnce(new ApiError(401, { detail: { code: 'INVALID_TOKEN' } }))
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect((await syncDriverOutbox('driver-1')).authentication_required).toBe(true)
+    vi.mocked(currentUser).mockResolvedValueOnce({ id: 'driver-2', role: 'DRIVER', email: 'other@example.test', display_name: 'Other', outlet_id: null, depot_code: null })
+    expect((await syncDriverOutbox('driver-1')).authentication_required).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((await readDriverOutbox('driver-1'))[0]).toMatchObject({ id: first.id, state: 'AUTH_REQUIRED', command: first.command })
   })
 })
