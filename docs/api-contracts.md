@@ -38,6 +38,8 @@ The database role code `STORE_MANAGER` maps to API role `STORE`; the other API r
 
 Authorization dependencies are provided for protected route handlers through `require_roles(...)` in the identity module. Every future operational route must declare its allowed roles and enforce outlet/depot/assignment scope in the handler or service. Authentication endpoints are intentionally available to all roles; `/me` and `/logout` require a valid session.
 
+Client recovery uses these existing endpoints; there is no refresh-token contract. A protected `401` requires sign-in again, rather than a permanent offline workflow conflict. Driver commands remain persisted, with unchanged command IDs, idempotency keys and event times, until the same driver re-authenticates. Replay validates `/auth/me` against the queue owner; another account cannot replay that queue. `403` and state/version errors remain blocking conflicts. This changes client recovery, not the backend API shape or authentication architecture.
+
 ## Store orders
 
 `GET /api/v1/store/orders/eligibility` returns the current cutoff and earliest eligible delivery date. `GET /api/v1/store/orders` returns the signed-in store's orders as `{ "items": [], "next_cursor": null }`. Both require the `STORE` role and an assigned outlet; callers cannot choose an outlet in the request.

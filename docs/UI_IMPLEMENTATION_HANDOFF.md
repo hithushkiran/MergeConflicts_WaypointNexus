@@ -4,7 +4,7 @@ This document records the review of the target UI against the current Waypoint N
 
 ## Design target
 
-[Open the Waypoint Figma file](https://www.figma.com/design/KNFRtbj8By67rMKqkZzYdw/MergeConflicts_Designathon-%25E2%2580%2594-Waypoint?node-id=1-2&p=f&t=Buczd97Y2TT0stdP-0). The `Screens by role` page includes Store Manager screens S01–S10, Dispatcher screens D01–D04 and G01–G03, Loader screens L01–L07, and Driver screens R01–R04. Treat the role screens and their linked states as the visual target; the current frontend is a temporary workflow UI.
+[Open the Waypoint Figma file](https://www.figma.com/design/KNFRtbj8By67rMKqkZzYdw/MergeConflicts_Designathon-%25E2%2580%2594-Waypoint?node-id=1-2&p=f&t=Buczd97Y2TT0stdP-0). The `Screens by role` page includes Store Manager screens S01–S10, Dispatcher screens D01–D04 and G01–G03, Loader screens L01–L07, and Driver screens R01–R04. Treat the role screens and their linked states as the visual target. The core role workspaces and shared shell are implemented, with responsive/accessibility hardening completed for the tested states and viewports. Exact visual acceptance remains pending the unavailable design ZIP.
 
 ## Current implementation at a glance
 
@@ -12,21 +12,22 @@ This document records the review of the target UI against the current Waypoint N
 - Backend: FastAPI routes in `backend/app/modules/`; PostgreSQL models and migrations in `backend/app/infrastructure/persistence.py` and `backend/migrations/`.
 - Existing operational APIs: authentication; store order eligibility/list/create; dispatcher order queue, planning, saved plans, publish, driver assignment, shortfall list/resolution; loader trip/manifests/checks/acknowledgement; driver assigned trips, depart, arrive, and complete.
 - Driver offline cache and outbox are implemented in `frontend/src/lib/driverOffline.ts` and the driver workspace.
-- The database has `receipts` and `delivery_issues` tables, but these are not yet exposed through store APIs or a store receipt workflow.
+- T09 implements outlet-scoped delivery, receipt and issue APIs, immutable receiving facts, dispatcher review/resolution, and the Store/Dispatcher receiving UI. See [T09 verification](T09_VERIFICATION.md).
+- T10 provides the shared shell and API-backed core role workspaces. Responsive/accessibility hardening is recorded in [T10–T12 verification](T10_T12_VERIFICATION.md); exact Figma acceptance remains pending. The local design exports are absent in this checkout and a design ZIP is required for comparison.
 - See [API contracts](api-contracts.md) for existing request and response contracts. Do not infer that a database model means a usable API already exists.
 
 ## Screen-to-capability map
 
 | Figma area | Existing support | Work needed before presenting as live functionality |
 | --- | --- | --- |
-| Store S01–S03: orders, create, confirmation, planned/deferred notice | Order eligibility, order list, create, dispatcher plan and order status exist. | Build the screens and role navigation. Store APIs do not yet provide the planned trip/ETA details shown in S03; either add a scoped read API or simplify S03 to available status information. |
-| Store S04/S04B/S05: receipt and discrepancy report | Receipt and delivery-issue tables exist only. | T09 must define and implement outlet-scoped receipt and issue APIs, state transitions, authorization, audit/idempotency expectations, and UI. |
+| Store S01–S03: orders, create, confirmation, planned/deferred notice | Order eligibility, order list, create, dispatcher plan and order status exist; core Store UI and role navigation are implemented. | Compare exact screens against the design ZIP when available. Store APIs do not provide planned trip/ETA details shown in S03; retain available status information until any additional scoped API is agreed. |
+| Store S04/S04B/S05: receipt and discrepancy report | T09 implements receipt, discrepancy reporting, scoped reads, review/resolution, audit and idempotency, plus UI. | Complete exact design comparison when references are available; preserve the documented quantity and case semantics. |
 | Store S06–S10: history, detail, dashboard, profile, settings | Order list and `/auth/me` exist. | History can start from the order list; decide whether detail and dashboard summaries can be derived safely from existing data. Outlet profile and preferences/settings need supporting data and APIs if they remain interactive. |
-| Dispatcher D01–D04: confirmed queue, plan, deferral, publish/assignment | Queue/filter, candidate plan, saved versions, publish, driver assignment, deferral decisions and shortfall resolution exist. | Build the screens against current APIs. D03 currently has no separate editable deferral-note command; the planner's reason is authoritative. Manual plan editing is not supported. Keep driver assignment aligned with the published plan/state rules. |
+| Dispatcher D01–D04: confirmed queue, plan, deferral, publish/assignment | Core UI supports queue/filter, candidate plan, saved versions, publish, driver assignment, deferral decisions and shortfall resolution. | Exact design comparison remains pending. D03 has no separate editable deferral-note command; the planner's reason is authoritative. Manual plan editing is unsupported. Keep driver assignment aligned with published plan/state rules. |
 | Dispatcher G01–G03: live routes, shortfall decision, future capacity | Shortfall list/resolution exists. Plan results contain trips and metrics. | Shortfall decision can use current APIs. A live route feed and forward-looking capacity forecast are not present; keep these as out of scope or define new API/data requirements before implementation. |
-| Loader L01–L04: route, checklist, exception/hold, revised manifest/release | Loader trip list, manifest versions, load checks, shortfall hold, current manifest acknowledgement, and READY transition exist. | Build the core path now. Current loader list omits some route/driver context shown in Figma; add only fields needed by an agreed screen. Model L04 acknowledgement/READY accurately: there is no separate gate-release command. |
+| Loader L01–L04: route, checklist, exception/hold, revised manifest/release | Core Loader UI supports trip list, manifest versions, load checks, shortfall hold, current manifest acknowledgement, and READY transition. | Exact design comparison remains pending. The loader list omits some route/driver context shown in Figma; unavailable details are labeled honestly. L04 acknowledgement/READY has no separate gate-release command. |
 | Loader L05–L07: settings, intercom, telemetry | No operational settings, messaging/intercom, or telemetry APIs/integrations exist. | Defer or remove from the judgeable flow until real sources, ownership, data freshness, and action semantics are agreed. Do not show fabricated live values. |
-| Driver R01–R04: route, stop, proof, offline/sync | Assigned trips, ordered stop commands, receiver/outcome/notes POD, and offline cache/outbox/sync exist. | Build the core driver screens now. Photo/signature capture and upload need an agreed storage approach and backend contract; they are not supported currently. |
+| Driver R01–R04: route, stop, proof, offline/sync | Core Driver UI supports assigned trips, ordered stop commands, receiver/outcome/notes POD, offline cache/outbox/sync and authentication recovery. | Exact design comparison remains pending. Photo/signature capture and upload need an agreed storage approach and backend contract; they are not supported currently. |
 
 ## Required shared demo story
 
@@ -82,6 +83,6 @@ Run relevant backend and frontend tests, typecheck/lint/build, then verify the c
 ## Decisions still needed
 
 - Confirm the canonical shortfall resolution for the demo (partial fulfillment is assumed above) and whether any exact Figma frame must be changed to match it.
-- Agree the store receipt/issue lifecycle and whether dispatch needs an issue-review/close action in T09.
+- T09 receipt/issue semantics and dispatcher review/resolution are implemented and documented in the API contract; revisit only if requirements change.
 - Decide which of the optional operational panels are in the deliverable scope. Do not treat them as prerequisites for the working core golden path.
 - Agree whether POD photo/signature is required; if yes, select storage and upload constraints before designing the API.

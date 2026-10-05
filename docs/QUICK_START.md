@@ -90,7 +90,7 @@ Stop containers while keeping the database volume:
 docker compose down
 ```
 
-Avoid `docker compose down -v` unless you intentionally want to permanently delete the local database and its seeded or created data. Demo CSVs in `backend/demo-data/` are synthetic. Official competition data belongs in the ignored `local-data/` directory and should not be committed.
+Preserve existing databases and volumes during acceptance and recovery. For fresh-install checks, use a separate checkout and isolated project as documented in [verification](T10_T12_VERIFICATION.md). Demo CSVs in `backend/demo-data/` are synthetic. Official competition data belongs in the ignored `local-data/` directory and should not be committed.
 
 ## Find your way around
 
@@ -105,4 +105,6 @@ Avoid `docker compose down -v` unless you intentionally want to permanently dele
 
 ## Continue project work
 
-The next work is T09 (store receipt and the complete golden path), followed by T10 (implement the core role-based UI from Figma). Read `docs/todo/README.md` for the task board and claim rules, then `docs/UI_IMPLEMENTATION_HANDOFF.md` for screen support, known backend gaps, design assumptions, and acceptance guidance. The Figma link and current APIs are mapped there so a teammate can start without relying on chat history. Do not implement optional panels with fabricated data; agree their data sources and API contracts first.
+T01–T09 are complete. The core T10 role workspaces are implemented and responsive/accessibility hardening passed in the tested states and viewports; exact visual acceptance requires the missing design ZIP. T11 optional scope awaits agreement, and T12 reliability/release work is in progress. Read `docs/todo/README.md`, `docs/T10_T12_VERIFICATION.md`, and `docs/T11_SCOPE.md` for current evidence and remaining decisions. Do not implement optional panels with fabricated data; agree their data sources and API contracts first.
+
+An expired driver session pauses queued sync and asks for sign-in. Sign in again with the same driver account to resume; commands, idempotency keys and original event times remain on this device. There is no refresh-token endpoint. Do not clear site data to recover a session: that deletes unsynced work. Other accounts cannot replay the driver's queue.

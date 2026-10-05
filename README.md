@@ -66,7 +66,7 @@ alembic upgrade head
 python -m app.seed
 ```
 
-The idempotent seed imports 4 roles, depots, outlets, vehicles, and development users: `store.manager@waypoint.local`, `dispatcher@waypoint.local`, `loader@waypoint.local`, and `driver@waypoint.local`. When official CSVs are available, it imports the official 120 outlets and 60 vehicles. In development only, Compose uses the clearly synthetic, packaged `backend/demo-data/` fixture when the official files are absent; its store account is scoped to `DEMO-OUT001`. These fixtures are not official competition data. No official calendar is currently available. Reset with `docker compose down -v` (warning: deletes local DB data), then `docker compose up --build`.
+The idempotent seed imports 4 roles, depots, outlets, vehicles, and development users: `store.manager@waypoint.local`, `dispatcher@waypoint.local`, `loader@waypoint.local`, and `driver@waypoint.local`. When official CSVs are available, it imports the official 120 outlets and 60 vehicles. In development only, Compose uses the clearly synthetic, packaged `backend/demo-data/` fixture when the official files are absent; its store account is scoped to `DEMO-OUT001`. These fixtures are not official competition data. No official calendar is currently available. Preserve existing databases and volumes; use the separate fresh-install project documented in [verification](docs/T10_T12_VERIFICATION.md) when a new seeded database is required.
 
 When `APP_ENV=development`, seeded users receive a password hash from `DEV_SEED_PASSWORD` only if they do not already have one. Compose supplies `waypoint-local-demo` as a local-only default; replace it in `.env` before sharing a development environment. Production seeding does not set this shared development password.
 
@@ -90,11 +90,7 @@ Stop the environment with:
 docker compose down
 ```
 
-To reset the local database, run the following command. **Warning: it permanently deletes local PostgreSQL data.**
-
-```powershell
-docker compose down --volumes
-```
+Keep database volumes when stopping or recovering the environment. Acceptance and fresh-install checks use separate isolated projects rather than deleting existing data.
 
 ## Run tests and checks
 
@@ -116,4 +112,4 @@ Use `<jira-key>/<short-kebab-case-description>`, for example `FND-01/initial-mon
 
 FND-02 adds a Docker Compose environment with the web, API, and PostgreSQL services. The API exposes `GET /health` for liveness and `GET /ready` for database readiness.
 
-Database schema migrations and deterministic seed data arrive in FND-03. Authentication and outlet-scoped store orders are available through the versioned endpoints documented in [docs/api-contracts.md](docs/api-contracts.md). Planning includes eligibility/allocation and dispatcher candidate review and publication for configured scenarios. Loading, delivery, sync, and receipt workflows remain in the subsequent roadmap tasks.
+Authentication, outlet-scoped store orders, configured-scenario planning, dispatcher review/publication/assignment, loading shortfall recovery, revised manifests, driver delivery, offline sync, and store receipt/case review are implemented (T01–T09). T10 provides the core role UI and shared responsive shell, with exact visual acceptance still pending. T11 optional integrations require scope/data-source agreement; T12 hardening and release gates remain in progress. See [current verification](docs/T10_T12_VERIFICATION.md) and [optional scope](docs/T11_SCOPE.md). Existing databases and volumes must be preserved during acceptance work.

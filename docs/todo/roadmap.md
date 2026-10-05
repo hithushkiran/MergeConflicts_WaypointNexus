@@ -2,6 +2,22 @@
 
 This is the detailed requirements checklist referenced by [`README.md`](README.md). Use the queue and status board there to select and assign work. This roadmap is not a live status report: unchecked items need verification against the repository before being treated as open.
 
+## T10–T12 checkpoint (2026-10-05)
+
+- [x] Reconcile core workflow capability with T09 APIs and implementation.
+- [x] Fix expired-auth outbox conflicts using existing sign-in contracts; preserve stable IDs/times and owner scope.
+- [x] Test persistent ordering for equal timestamps and clock rollback; recover known legacy auth conflicts.
+- [x] Verify API golden path and disconnected browser delivery/re-authentication/receipt/review.
+- [x] Check tested role/receipt states at phone/tablet/desktop widths with axe and keyboard skip-link focus.
+- [x] Run backend/frontend regression, typecheck, lint, production build and diff checks.
+- [x] Verify a fresh local checkout with a new isolated Compose volume, four accounts, migration/seed and the API golden path.
+- [ ] Complete exact T10 design comparison; required local exports are absent (design ZIP needed).
+- [ ] Agree T11 optional feature set and authoritative sources/contracts before optional implementation.
+- [ ] Complete remaining T12 release gates and submission deliverables; agree hosting before public deployment.
+
+Evidence and bounded acceptance coverage: [T10–T12 verification](../T10_T12_VERIFICATION.md).
+Unchecked historical phases are not overwritten by this checkpoint; defer/skip/block is not completion.
+
 ## Priority hierarchy
 
 | Priority | Meaning                                      | Agent behavior                    |
@@ -192,9 +208,8 @@ Create deterministic data for:
 
 ### Gate
 
-Destroy the database.
-
-Recreate it.
+Create a separate isolated project with a new database volume; preserve existing
+databases and volumes. Do not destroy acceptance or shared development data.
 
 Run migrations.
 
@@ -1199,7 +1214,8 @@ The agent should now run:
 
 This should be treated as a hard release gate.
 
-Delete the local environment.
+Use a separate fresh checkout and isolated Compose project. Preserve the existing
+local and acceptance environments; never delete them as part of this test.
 
 Then execute only the documented process:
 
@@ -1285,7 +1301,7 @@ Store → Receipt
 
 ### Demo Run #7
 
-Run **everything from a clean reset**.
+Run **everything in a separate freshly seeded project**, preserving existing volumes.
 
 ---
 
